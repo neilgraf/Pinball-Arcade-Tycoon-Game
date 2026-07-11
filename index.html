@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pinball Palace Tycoon</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- ===== TOP BAR ===== -->
+  <header id="topbar">
+    <div class="logo">🕹️ PINBALL PALACE <span>TYCOON</span></div>
+
+    <div class="stat" title="Cash on hand">
+      <span class="stat-icon">💰</span>
+      <span class="stat-value" id="statCash">$0</span>
+    </div>
+    <div class="stat" title="Reputation — unlocks machines and tournaments">
+      <span class="stat-icon">⭐</span>
+      <span class="stat-value" id="statRep">0</span>
+      <span class="stat-sub" id="statRepTier">Unknown</span>
+    </div>
+    <div class="stat" title="Customer satisfaction — drives traffic and reputation">
+      <span class="stat-icon">😊</span>
+      <span class="stat-value" id="statSat">70%</span>
+    </div>
+    <div class="stat" title="Cleanliness — janitors keep it up">
+      <span class="stat-icon">🧹</span>
+      <span class="stat-value" id="statClean">100%</span>
+      <button class="btn tiny" id="btnClean" title="Deep clean: $60 for +45 cleanliness">🧼 $60</button>
+    </div>
+    <div class="stat" title="Guests currently in your arcade">
+      <span class="stat-icon">👥</span>
+      <span class="stat-value" id="statGuests">0</span>
+    </div>
+    <span id="buzzBadge" style="display:none"></span>
+
+    <div class="spacer"></div>
+
+    <div class="stat clock">
+      <span class="stat-value" id="statDay">Day 1</span>
+      <span class="stat-sub" id="statClock">10:00</span>
+    </div>
+    <div class="speed-controls">
+      <button id="spd0" class="btn speed" title="Pause (Space)">⏸</button>
+      <button id="spd1" class="btn speed active" title="Normal speed">▶</button>
+      <button id="spd2" class="btn speed" title="Fast">▶▶</button>
+      <button id="spd4" class="btn speed" title="Very fast">▶▶▶</button>
+    </div>
+
+    <div class="menu-buttons">
+      <button class="btn" id="btnDashboard">📊 Dashboard</button>
+      <button class="btn" id="btnStaff">👥 Staff</button>
+      <button class="btn gold" id="btnTournaments">🏆 Tournaments</button>
+      <button class="btn" id="btnSave" title="Auto-saves nightly">💾</button>
+      <button class="btn danger" id="btnNew" title="Start a new game">🗑</button>
+    </div>
+  </header>
+
+  <!-- ===== MAIN LAYOUT ===== -->
+  <div id="layout">
+    <aside id="sidebar">
+      <div class="sidebar-head">MACHINE SHOP</div>
+      <div id="shopList"></div>
+      <div class="sidebar-foot">
+        <label id="priceLabel" for="priceSlider">Pricing: 100%</label>
+        <input type="range" id="priceSlider" min="50" max="200" value="100" step="5"
+               title="Global price level — cheap fills the room, pricey milks it">
+        <button class="btn" id="btnExpand">🏗️ Expand</button>
+      </div>
+    </aside>
+
+    <main id="canvasWrap">
+      <canvas id="gameCanvas"></canvas>
+      <div id="placeHint" style="display:none"></div>
+      <div id="inspectPanel" style="display:none"></div>
+      <div id="daySummary"></div>
+      <div id="ticker" class="ticker"></div>
+    </main>
+  </div>
+
+  <!-- ===== MODAL ===== -->
+  <div id="modalOverlay" style="display:none">
+    <div id="modalBox" class="modal-box"></div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/tournament.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
