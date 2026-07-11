@@ -25,14 +25,16 @@ const Sim = {
     const s = Game.state;
     // Traffic model: reputation + machine appeal draw people in;
     // satisfaction and pricing decide whether they bother coming back.
-    const repFactor = 0.5 + s.reputation / 140;
-    const appealFactor = 1 + Game.totalAppeal() / 55;
+    const repFactor = 0.5 + s.reputation / 155;
+    const appealFactor = 1 + Game.totalAppeal() / 60;
     const satFactor = 0.45 + s.satisfaction / 110;
     const priceFactor = Game.clamp(1.6 - 0.6 * s.priceLevel, 0.35, 1.4);
     const buzz = s.buzzDays > 0 ? s.buzzMult : 1;
+    // Grimy floors turn people away at the door
+    const cleanFactor = Game.clamp(0.55 + s.cleanliness / 130, 0.55, 1.3);
     // Day curve: quiet open, packed evening
     const curve = Math.pow(Math.sin(Math.PI * Game.clamp(s.time, 0.02, 0.98)), 0.7) * 1.35;
-    return 0.55 * repFactor * appealFactor * satFactor * priceFactor * buzz * curve;
+    return 0.5 * repFactor * appealFactor * satFactor * priceFactor * cleanFactor * buzz * (s.dayVibe || 1) * curve;
   },
   capacity() {
     // Keep the crowd close to what the machines can actually serve,
@@ -146,22 +148,30 @@ const Sim = {
     const m = s.machines.find(m => m.id === c.machineId);
     if (m) {
       const def = Game.def(m.defId);
-      const price = Game.machinePrice(m);
+      // Poorly maintained machines earn less per play, and takings fluctuate
+      const condFactor = 0.7 + 0.3 * m.condition / 100;
+      const price = Game.machinePrice(m) * condFactor * Game.rand(0.94, 1.08);
       Game.income(price, 'plays');
       m.revenue += price;
       m.plays++;
       c.budget -= price;
       c.playsDone++;
 
-      // Wear and tear — reliability slows it, upgrades refurbish
-      const wear = Game.rand(0.8, 1.6) * (11 - def.rel) / 22;
+      // Wear and tear — reliability slows it; big fleets stretch upkeep thin
+      const fleetMult = 1 + Game.machineCount() / 30;
+      const staffMult = Sim.techDeficit() > 0 ? 1.35 : 1;
+      const wear = Game.rand(0.9, 1.8) * (11 - def.rel) / 22 * fleetMult * staffMult;
       m.condition = Math.max(0, m.condition - wear);
-      if (m.condition < 18 && Math.random() < 0.25) {
+      // Breakdowns: rare when healthy, likely when neglected
+      const breakChance = m.condition < 20 ? 0.3 : m.condition < 45 ? 0.02 : 0.002;
+      if (Math.random() < breakChance * staffMult) {
         m.broken = true;
         m.repair = 0;
         Game.addNews(`🔴 ${def.name} just broke down!`, 'bad');
       }
-      s.cleanliness = Math.max(0, s.cleanliness - 0.12);
+      // Foot traffic makes a mess, and big rooms take more to keep clean
+      const dirt = 0.10 * (1 + s.customers.length / 20) * (1 + s.expansion * 0.15);
+      s.cleanliness = Math.max(0, s.cleanliness - dirt);
 
       // Per-play mood contribution
       c.mood += (m.condition - 55) * 0.06
@@ -252,6 +262,38 @@ const Sim = {
 
   hasManager() { return Game.state.staff.some(st => st.type === 'manager'); },
 
+  /* ---- staffing requirements: bigger arcades need bigger crews ---- */
+  techsNeeded() {
+    const n = Game.machineCount();
+    return n <= 3 ? 0 : Math.ceil(n / 6);
+  },
+  janitorsNeeded() {
+    const n = Game.machineCount();
+    return n <= 3 ? 0 : Math.ceil((n + Game.state.expansion * 4) / 10);
+  },
+  staffCount(type) { return Game.state.staff.filter(st => st.type === type).length; },
+  techDeficit() { return Math.max(0, Sim.techsNeeded() - Sim.staffCount('tech')); },
+  janitorDeficit() { return Math.max(0, Sim.janitorsNeeded() - Sim.staffCount('janitor')); },
+
+  /* ---- Event Manager bonuses: stack with diminishing returns ---- */
+  managerBonus() {
+    const mgrs = Game.state.staff
+      .filter(st => st.type === 'manager')
+      .sort((a, b) => b.level - a.level);
+    let eff = 0, weight = 1;
+    for (const m of mgrs) {
+      eff += m.level * weight;
+      weight *= 0.55;                 // each extra manager counts a little less
+    }
+    return {
+      eff,
+      rev:     1 + 0.12 * eff,        // entry-adjacent revenue (tickets, sponsors)
+      rep:     1 + 0.08 * eff,        // reputation gains from events
+      spect:   1 + 0.06 * eff,        // attendance draw
+      quality: 0.05 * eff,            // added tournament quality score
+    };
+  },
+
   hire(type) {
     const s = Game.state;
     const info = DATA.STAFF[type];
@@ -276,7 +318,19 @@ const Sim = {
   /* ================= PASSIVE DECAY ================= */
   passiveDecay(dt) {
     const s = Game.state;
-    s.cleanliness = Math.max(0, s.cleanliness - 0.03 * dt * (1 + s.customers.length / 15));
+    // Dirt builds with crowd size and venue footprint; understaffed janitors make it worse
+    const sizeMult = 1 + s.expansion * 0.2;
+    const janMult = 1 + 0.5 * Sim.janitorDeficit();
+    s.cleanliness = Math.max(0, s.cleanliness - 0.035 * dt * (1 + s.customers.length / 12) * sizeMult * janMult);
+    // Understaffed technicians: the whole fleet slowly falls behind on upkeep
+    const deficit = Sim.techDeficit();
+    if (deficit > 0) {
+      const extra = 0.05 * deficit * dt;
+      for (const m of s.machines) {
+        if (Game.def(m.defId).type === 'amenity') continue;
+        m.condition = Math.max(0, m.condition - extra);
+      }
+    }
   },
 
   flavor(dt) {
@@ -312,11 +366,13 @@ const Sim = {
     // Word of mouth fades toward neutral overnight
     s.satisfaction += (55 - s.satisfaction) * 0.08;
 
-    // Reputation drift: earned by quality + happy customers, decays otherwise
-    let repDelta = -0.5;
-    repDelta += (s.satisfaction - 50) / 8;
-    repDelta += Game.clamp((Game.avgCondition() - 60) / 40, -0.5, 1);
-    repDelta += Math.min(2, s.today.customers / 30);   // word of mouth
+    // Reputation drift: earned by quality + happy customers, decays otherwise.
+    // High reputation is expensive to hold — fame fades fast at the top.
+    let repDelta = -0.6 - s.reputation * 0.003;
+    repDelta += (s.satisfaction - 52) / 9;
+    repDelta += Game.clamp((Game.avgCondition() - 62) / 45, -0.8, 0.9);
+    repDelta += Game.clamp((s.cleanliness - 55) / 60, -0.8, 0.5);
+    repDelta += Math.min(1.5, s.today.customers / 40);   // word of mouth
     s.reputation = Game.clamp(s.reputation + repDelta, 0, 1000);
 
     // Record the day
@@ -340,6 +396,10 @@ const Sim = {
     s.today = { income: 0, expense: 0, customers: 0, cats: {} };
     if (s.buzzDays > 0) { s.buzzDays--; if (s.buzzDays === 0) s.buzzMult = 1; }
 
+    // Every day feels a little different — roll tomorrow's traffic vibe first
+    // so events (flu, field trips) can override it
+    s.dayVibe = Game.rand(0.82, 1.18);
+
     // Roll a random event for the new day
     for (const ev of DATA.EVENTS) {
       if (Math.random() < ev.chance) {
@@ -349,14 +409,49 @@ const Sim = {
       }
     }
 
-    // Off-screen circuit: competitors grind and improve between your events
+    // Staffing & upkeep warnings for the morning
+    const techDef = Sim.techDeficit(), janDef = Sim.janitorDeficit();
+    if (techDef > 0)
+      Game.addNews(`⚠️ Maintenance understaffed! You need ${Sim.techsNeeded()} technician${Sim.techsNeeded() > 1 ? 's' : ''} for ${Game.machineCount()} machines — wear and breakdowns are accelerating.`, 'bad');
+    if (janDef > 0)
+      Game.addNews(`⚠️ Cleaning crew understaffed! You need ${Sim.janitorsNeeded()} janitor${Sim.janitorsNeeded() > 1 ? 's' : ''} for an arcade this size.`, 'bad');
+    if (s.cleanliness < 40)
+      Game.addNews('🧹 Cleanliness critical! Guests are turning away at the door and your reputation is suffering.', 'bad');
+
+    // Off-screen circuit: pros play events elsewhere, so rankings shift between your tournaments
+    if (s.day % 3 === 0) Sim.offscreenCircuit();
+    // Slow natural drift keeps the meta from freezing
     if (s.day % 5 === 0) {
       for (const comp of s.competitors) {
-        comp.skill = Math.min(99, comp.skill + Game.rand(0, 0.6));
+        comp.skill = Game.clamp(comp.skill + Game.rand(-0.3, 0.5), 25, 99);
       }
     }
 
     Game.save();
     UI.refreshAll();
+  },
+
+  /* An 8-player event somewhere else in the world: win/loss records,
+     ranking points and skill all move without the player hosting anything. */
+  offscreenCircuit() {
+    const s = Game.state;
+    const field = [...s.competitors].sort(() => Math.random() - 0.5).slice(0, 8);
+    let round = field;
+    let stage = 0;
+    while (round.length > 1) {
+      const winners = [];
+      for (let i = 0; i < round.length; i += 2) {
+        const a = round[i], b = round[i + 1];
+        const pa = a.skill * Game.rand(0.8, 1.2), pb = b.skill * Game.rand(0.8, 1.2);
+        const w = pa >= pb ? a : b, l = w === a ? b : a;
+        w.wins++; l.losses++;
+        w.points += 2 * (stage + 1);
+        Tournament.skillShift(w, l);
+        winners.push(w);
+      }
+      round = winners;
+      stage++;
+    }
+    round[0].points += 6;
   },
 };

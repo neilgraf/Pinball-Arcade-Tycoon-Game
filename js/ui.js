@@ -255,6 +255,7 @@ const UI = {
       <div class="insp-row"><span>Condition</span><b class="${condClass}">${Math.round(m.condition)}%</b></div>
       <div class="insp-bar"><div class="insp-bar-fill ${condClass}" style="width:${m.condition}%"></div></div>
       <div class="insp-row"><span>Price/play</span><b>${Game.money(Game.machinePrice(m))}</b></div>
+      ${m.condition < 60 && !m.broken ? '<div class="insp-blurb bad">⚠️ Low condition is cutting this machine\'s earnings — repair or maintain it.</div>' : ''}
       <div class="insp-row"><span>Total plays</span><b>${m.plays}</b></div>
       <div class="insp-row"><span>Lifetime revenue</span><b>${Game.money(m.revenue)}</b></div>
       `}
@@ -426,6 +427,29 @@ const UI = {
         <div class="insp-blurb">${info.desc}</div>
         <button class="btn primary" onclick="UI.hireStaff('${type}')">Hire ${info.name}</button>
       </div>`).join('');
+
+    // Staffing status: does the crew match the size of the operation?
+    const techHave = Sim.staffCount('tech'), techNeed = Sim.techsNeeded();
+    const janHave = Sim.staffCount('janitor'), janNeed = Sim.janitorsNeeded();
+    const mgr = Sim.managerBonus();
+    const needRow = (icon, label, have, need) => {
+      const ok = have >= need;
+      return `<div class="insp-row"><span>${icon} ${label}</span>
+        <b class="${ok ? 'good' : 'bad'}">${have} / ${need} needed${ok ? '' : ' ⚠️'}</b></div>`;
+    };
+    const statusCard = `
+      <div class="dash-card">
+        <h3>📋 Staffing status — ${Game.machineCount()} machines, ${DATA.EXPANSIONS[s.expansion].name}</h3>
+        ${needRow('🔧', 'Technicians', techHave, techNeed)}
+        ${techHave < techNeed ? '<div class="insp-blurb bad">Understaffed: machines wear +35% faster and break down more often.</div>' : ''}
+        ${needRow('🧹', 'Janitors', janHave, janNeed)}
+        ${janHave < janNeed ? '<div class="insp-blurb bad">Understaffed: dirt piles up faster, hurting satisfaction and reputation.</div>' : ''}
+        <div class="insp-row"><span>📋 Event Manager bonus</span>
+          <b class="${mgr.eff > 0 ? 'good' : ''}">${mgr.eff > 0
+            ? `+${Math.round((mgr.rev - 1) * 100)}% revenue · +${Math.round((mgr.spect - 1) * 100)}% attendance · +${Math.round((mgr.rep - 1) * 100)}% rep`
+            : 'none'}</b></div>
+        <div class="insp-blurb">Managers stack with diminishing returns; higher-level managers give stronger bonuses.</div>
+      </div>`;
     const roster = s.staff.map(st => {
       const info = DATA.STAFF[st.type];
       return `<tr><td>${info.icon} ${st.name}</td><td>${info.name}</td><td>Lv.${st.level}</td>
@@ -436,7 +460,8 @@ const UI = {
 
     UI.openModal(`
       <div class="modal-head"><h2>👥 Staff Management</h2><button class="btn-x" onclick="UI.closeModal()">✕</button></div>
-      <div class="dash-grid three">${cards}</div>
+      ${statusCard}
+      <div class="dash-grid three" style="margin-top:12px">${cards}</div>
       <div class="dash-card">
         <h3>Your team — ${Game.money(totalWages)}/day in wages</h3>
         <table class="dash-table">
@@ -472,7 +497,7 @@ const UI = {
         <div class="dash-card tier-card ${tier.id === 'world' ? 'world' : ''}">
           <h3>${tier.name} ${hostedN > 0 ? `<span class="hosted-badge">hosted ${hostedN}×</span>` : ''}</h3>
           <div class="insp-blurb">${tier.desc}</div>
-          <div class="insp-row"><span>Entrants</span><b>${tier.entrants} players</b></div>
+          <div class="insp-row"><span>Entrants</span><b>${tier.entrants} players${tier.qualifyRank ? ` <span class="dim">(top ${tier.qualifyRank} ranked${tier.id === 'world' ? ' only' : ' qualify'})</span>` : ' (open field)'}</b></div>
           <div class="insp-row"><span>Entry fees</span><b class="good">+${Game.money(tier.entrants * tier.entryFee)}</b></div>
           <div class="insp-row"><span>Tickets</span><b class="good">~${Game.money(tier.ticket)}/spectator</b></div>
           <div class="insp-row"><span>Prize pool</span><b class="bad">-${Game.money(tier.prize)}</b></div>
@@ -483,17 +508,19 @@ const UI = {
         </div>`;
       }).join('');
     } else if (tab === 'circuit') {
-      const sorted = [...s.competitors].sort((a, b) => b.skill - a.skill);
-      body = `<div class="dash-card"><h3>Pro Circuit Rankings</h3>
+      const sorted = Tournament.rankings();
+      body = `<div class="dash-card"><h3>Pro Circuit Rankings — top 32 qualify for the World Championship</h3>
         <table class="dash-table">
-        <tr><th>#</th><th>Player</th><th>Skill</th><th>Style</th><th>W–L</th><th>Titles</th></tr>
+        <tr><th>#</th><th>Player</th><th>Pts</th><th>Skill</th><th>Style</th><th>W–L</th><th>Titles</th><th></th></tr>
         ${sorted.map((p, i) => `<tr>
           <td>${i + 1}</td>
           <td>${Tournament.displayName(p)}</td>
+          <td>${Math.round(p.points)}</td>
           <td>${Math.round(p.skill)}</td>
           <td>${DATA.STYLES.find(st => st.id === p.style).name}</td>
           <td>${p.wins}–${p.losses}</td>
           <td>${p.titles > 0 ? '🏆'.repeat(Math.min(p.titles, 5)) + (p.titles > 5 ? '×' + p.titles : '') : '—'}</td>
+          <td>${i < 32 ? '<span class="good" title="Qualified for the World Championship">🎫 WC</span>' : ''}</td>
         </tr>`).join('')}
         </table></div>`;
     } else {
@@ -579,6 +606,9 @@ const UI = {
         <div class="dash-card">
           <h3>📈 Aftermath</h3>
           <div class="insp-row"><span>Reputation</span><b class="good">+${r.repGain}</b></div>
+          <div class="insp-row"><span>Event quality</span><b class="${r.quality >= 1 ? 'good' : 'warn'}">${Math.round(r.quality * 100)}%</b></div>
+          ${r.mgrEff > 0 ? `<div class="insp-row"><span>Event Manager bonus</span><b class="good">+${r.mgrRevPct}% revenue</b></div>`
+            : `<div class="insp-row"><span>Event Manager bonus</span><b class="dim">none on staff</b></div>`}
           <div class="insp-row"><span>Post-event buzz</span><b class="good">×${Game.state.buzzMult.toFixed(1)} traffic for ${Game.state.buzzDays} days</b></div>
           <div class="insp-row"><span>Excitement rating</span><b>${'⭐'.repeat(Game.clamp(Math.round(t.excitement * 3), 1, 5))}</b></div>
           <div class="insp-row"><span>Upsets</span><b>${t.upsets}</b></div>
@@ -652,8 +682,10 @@ const UI = {
         <b>Quick tips:</b><br>
         • Click a machine in the <b>shop</b> (left), then click the floor to place it.<br>
         • Click any placed machine to inspect, upgrade, repair, or move it.<br>
-        • Machines wear out — hire a <b>technician</b> before things fall apart.<br>
-        • Dirty floors and broken machines wreck satisfaction, and satisfaction drives everything.<br>
+        • Machines wear out — bigger arcades need <b>more technicians</b>, or wear and breakdowns accelerate.<br>
+        • Bigger crowds mean more mess — keep enough <b>janitors</b> or satisfaction, reputation and tournament turnout suffer.<br>
+        • Higher-tier tournaments demand <b>variety and upgraded (★★/★★★) machines</b>, and pros must <b>qualify by ranking</b>.<br>
+        • <b>Event Managers</b> boost tournament revenue, attendance and reputation — check the Staff panel.<br>
         • <b>Space</b> pauses. Speed buttons are up top. Your game auto-saves every night.
       </div>
       <button class="btn primary big" onclick="UI.closeModal()">Open the doors!</button>`);

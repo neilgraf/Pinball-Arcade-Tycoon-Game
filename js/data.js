@@ -68,35 +68,48 @@ DATA.EXPANSIONS = [
 
 /* ---------- Staff ---------- */
 DATA.STAFF = {
-  tech:    { name:'Technician',    wage:40, icon:'🔧', desc:'Repairs broken machines and performs preventive maintenance. Levels up to work faster.' },
-  janitor: { name:'Janitor',       wage:25, icon:'🧹', desc:'Keeps the arcade clean. Dirty arcades tank satisfaction and reputation.' },
-  manager: { name:'Event Manager', wage:80, icon:'📋', desc:'+30% tournament revenue, +25% tournament reputation. Required for National tier and above.' },
+  tech:    { name:'Technician',    wage:40, icon:'🔧', desc:'Repairs broken machines and performs preventive maintenance. Bigger arcades need more of them — understaffed machines wear out fast.' },
+  janitor: { name:'Janitor',       wage:25, icon:'🧹', desc:'Keeps the arcade clean. Bigger, busier arcades need more janitors. Dirty arcades tank satisfaction, reputation and tournament turnout.' },
+  manager: { name:'Event Manager', wage:80, icon:'📋', desc:'Boosts tournament revenue, attendance, quality and reputation gains. Multiple managers stack with diminishing returns. Required for National tier and above.' },
 };
 
-/* ---------- Tournament tiers ---------- */
+/* ---------- Tournament tiers ----------
+   req extras:
+     unique   — distinct machine models required (variety)
+     star2    — machines upgraded to ★★ or better
+     star3    — machines upgraded to ★★★
+   qualifyRank — entrants are drawn from the top N ranked pros
+                 (null = open field); World is strictly the top 32.
+   pointsWin / pointsTitle — circuit ranking points awarded */
 DATA.TIERS = [
-  { id:'local', name:'Local Showdown', entrants:8,
-    req:{ machines:4, pinball:2, rep:25, avgCond:50, expansion:0, hostedPrev:null, manager:false },
-    hostCost:100, entryFee:25, ticket:5, prize:200, repReward:40, baseSpectators:70, sponsorPerRep:0,
+  { id:'local', name:'Local Showdown', entrants:4, qualifyRank:null,
+    req:{ machines:4, pinball:2, unique:3, star2:0, star3:0, rep:40, avgCond:55, expansion:0, hostedPrev:null, manager:false },
+    hostCost:150, entryFee:25, ticket:5, prize:250, repReward:30, baseSpectators:60, sponsorPerRep:0,
+    pointsWin:2, pointsTitle:8,
     desc:'Neighborhood flippers battle for bragging rights and a modest check.' },
-  { id:'regional', name:'Regional Masters', entrants:8,
-    req:{ machines:8, pinball:4, rep:180, avgCond:60, expansion:1, hostedPrev:'local', manager:false },
-    hostCost:400, entryFee:60, ticket:8, prize:800, repReward:90, baseSpectators:200, sponsorPerRep:1.2,
+  { id:'regional', name:'Regional Masters', entrants:8, qualifyRank:24,
+    req:{ machines:6, pinball:3, unique:4, star2:2, star3:0, rep:220, avgCond:65, expansion:1, hostedPrev:'local', manager:false },
+    hostCost:500, entryFee:60, ticket:8, prize:900, repReward:70, baseSpectators:180, sponsorPerRep:1.2,
+    pointsWin:4, pointsTitle:20,
     desc:'The region’s best. Scouts in the crowd. Local news might show up.' },
-  { id:'national', name:'National Open', entrants:16,
-    req:{ machines:12, pinball:6, rep:420, avgCond:70, expansion:2, hostedPrev:'regional', manager:true },
-    hostCost:1200, entryFee:120, ticket:14, prize:2500, repReward:170, baseSpectators:450, sponsorPerRep:5,
+  { id:'national', name:'National Open', entrants:16, qualifyRank:20,
+    req:{ machines:10, pinball:6, unique:6, star2:5, star3:2, rep:520, avgCond:72, expansion:2, hostedPrev:'regional', manager:true },
+    hostCost:1500, entryFee:120, ticket:14, prize:3000, repReward:140, baseSpectators:420, sponsorPerRep:5,
+    pointsWin:9, pointsTitle:50,
     desc:'Televised. Sponsored. Sixteen killers and one trophy.' },
-  { id:'world', name:'WORLD CHAMPIONSHIP', entrants:16,
-    req:{ machines:16, pinball:9, rep:800, avgCond:80, expansion:3, hostedPrev:'national', manager:true },
-    hostCost:3000, entryFee:250, ticket:28, prize:10000, repReward:300, baseSpectators:900, sponsorPerRep:10,
-    desc:'The summit of competitive pinball. Host this, and your name enters history.' },
+  { id:'world', name:'WORLD CHAMPIONSHIP', entrants:32, qualifyRank:32,
+    req:{ machines:15, pinball:9, unique:8, star2:12, star3:8, rep:870, avgCond:82, expansion:3, hostedPrev:'national', manager:true },
+    hostCost:4000, entryFee:250, ticket:28, prize:12000, repReward:250, baseSpectators:900, sponsorPerRep:10,
+    pointsWin:20, pointsTitle:120,
+    desc:'The summit of competitive pinball. Only the top 32 ranked players on Earth are invited. Host this, and your name enters history.' },
 ];
 
 /* Spectator capacity by expansion level */
 DATA.SPECTATOR_CAP = [90, 240, 520, 1200];
 
 /* ---------- Competitor generation pools ---------- */
+/* Real-name pros seeded into every new circuit */
+DATA.NAMED_PLAYERS = ['Tom Graf','Neil Graf','Eric Graf','Michelle Graf','Kassidy Milanowski','Ryan Graf'];
 DATA.FIRST_NAMES = ['Max','Rosa','Kenji','Priya','Dmitri','Luna','Otis','Greta','Sami','Wren','Hugo','Ivy','Bram','Zoe','Rafael','Nadia','Chip','Mabel','Theo','Yuki','Salvatore','June','Ezra','Colette','Boris','Tilda','Andre','Faye','Gus','Marisol'];
 DATA.LAST_NAMES  = ['Voltage','Okafor','Silverball','Nakamura','Petrov','Flint','McTilt','Larsson','Drainer','Castellano','Bumper','Reyes','Plunkett','Osei','Kickback','Moreau','Slingshot','Tanaka','Nudge','Whitfield','Ramos','Skillshot','Berg','Duval','Orbit','Halloway','Vex','Santini','Lockdown','Quiroga'];
 DATA.NICKNAMES   = ['The Wizard','Iron Wrists','Tilt Whisperer','The Machine','Deadflip','Multiball Menace','The Professor','Nudge Queen','Ball Saver','The Surgeon','Flipper King','Miss Extra Ball','The Vault','Golden Plunge','Steady Eddie','The Hurricane'];
@@ -162,6 +175,17 @@ DATA.EVENTS = [
       return '🧙 A legendary pinball wizard dropped by unannounced and drew a crowd! +12 reputation.'; } },
   { id:'rain',    chance:0.05, run:(s)=>{ s.buzzDays=Math.max(s.buzzDays,1); s.buzzMult=Math.max(s.buzzMult,1.4);
       return '🌧️ Rainy day! Nothing drives arcade traffic like bad weather.'; } },
+  { id:'sponsor', chance:0.04, run:(s)=>{ if(s.reputation<150) return null;
+      const amt = Game.randInt(100, 100 + Math.round(s.reputation/2)); Game.income(amt,'sponsors');
+      return `🤝 A local sponsor dropped off a promo check for $${amt}!`; } },
+  { id:'inspect', chance:0.04, run:(s)=>{ if(s.cleanliness < 55){ const fine = Game.randInt(80,220); Game.expense(fine,'utilities'); s.reputation=Math.max(0,s.reputation-8);
+        return `🧑‍⚖️ Surprise health inspection! Sticky floors cost you a $${fine} fine and -8 reputation.`; }
+      s.reputation=Math.min(1000,s.reputation+6);
+      return '🧑‍⚖️ Surprise health inspection — passed with flying colors! +6 reputation.'; } },
+  { id:'flu',     chance:0.04, run:(s)=>{ s.dayVibe = Math.min(s.dayVibe, Game.rand(0.5,0.7));
+      return '🤒 A nasty flu is going around town. Expect a quiet day.'; } },
+  { id:'fieldtrip',chance:0.03, run:(s)=>{ s.dayVibe = Math.max(s.dayVibe, Game.rand(1.3,1.6)); s.cleanliness=Math.max(0,s.cleanliness-10);
+      return '🚌 A school field trip just pulled up! Busy (and messy) day ahead.'; } },
 ];
 
 /* ---------- Flavor ticker lines ---------- */
