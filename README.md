@@ -61,7 +61,7 @@ The game auto-saves at the end of every in-game day (localStorage).
 
 ## AI-Assisted Development
 
-This project was initially generated using AI (Fable/Claude) based on a detailed design prompt.
+This project was initially generated using AI (Claude) based on a detailed design prompt.
 
 I then:
 
