@@ -4,7 +4,7 @@
 
 const Game = {
   TILE: 44,
-  SAVE_KEY: 'pinballPalaceTycoonSave_v1',
+  SAVE_KEY: 'pinballPalaceTycoonSave_v2',
   DAY_LENGTH: 60,          // seconds of real time per in-game day at 1x speed
   state: null,
 
@@ -23,14 +23,15 @@ const Game = {
   /* ---------- new game ---------- */
   newGame() {
     const s = {
-      version: 1,
+      version: 2,
       day: 1,
       time: 0,                // 0..1 through current day
       speed: 1,
-      cash: 2000,
+      cash: 1600,
       reputation: 10,
       satisfaction: 70,
       cleanliness: 100,
+      dayVibe: 1,             // daily random traffic multiplier
       priceLevel: 1.0,        // 0.5 .. 2.0 global price multiplier
       expansion: 0,
       buzzDays: 0,
@@ -54,24 +55,29 @@ const Game = {
     };
     Game.state = s;
 
-    // Generate the competitive circuit roster
-    const usedNames = new Set();
-    for (let i = 0; i < 28; i++) {
+    // Generate the competitive circuit roster (must exceed 32 for the World Championship field)
+    const makeCompetitor = (id, name, skill) => ({
+      id,
+      name,
+      nickname: skill > 80 ? Game.pick(DATA.NICKNAMES) : null,
+      skill,
+      consistency: +Game.rand(0.55, 0.98).toFixed(2), // higher = less variance
+      style: Game.pick(DATA.STYLES).id,
+      wins: 0, losses: 0, titles: 0,
+      points: 0,                                      // circuit ranking points
+    });
+    const usedNames = new Set(DATA.NAMED_PLAYERS);
+    let nextId = 0;
+    for (const name of DATA.NAMED_PLAYERS) {
+      s.competitors.push(makeCompetitor(nextId++, name, Math.round(Game.rand(55, 88))));
+    }
+    for (let i = 0; i < 34; i++) {
       let name;
       do {
         name = Game.pick(DATA.FIRST_NAMES) + ' ' + Game.pick(DATA.LAST_NAMES);
       } while (usedNames.has(name));
       usedNames.add(name);
-      const skill = Math.round(Game.rand(42, 92));
-      s.competitors.push({
-        id: i,
-        name,
-        nickname: skill > 80 ? Game.pick(DATA.NICKNAMES) : null,
-        skill,
-        consistency: +Game.rand(0.55, 0.98).toFixed(2), // higher = less variance
-        style: Game.pick(DATA.STYLES).id,
-        wins: 0, losses: 0, titles: 0,
-      });
+      s.competitors.push(makeCompetitor(nextId++, name, Math.round(Game.rand(42, 92))));
     }
 
     // Starter machines, pre-placed near the entrance
@@ -149,6 +155,17 @@ const Game = {
     if (!ms.length) return 0;
     return ms.reduce((a, m) => a + m.condition, 0) / ms.length;
   },
+  uniqueMachineTypes() {
+    const set = new Set();
+    for (const m of Game.state.machines) {
+      if (Game.def(m.defId).type !== 'amenity') set.add(m.defId);
+    }
+    return set.size;
+  },
+  starCount(minLevel) {
+    return Game.state.machines.filter(m =>
+      Game.def(m.defId).type !== 'amenity' && m.level >= minLevel).length;
+  },
   totalAppeal() {
     let a = 0;
     for (const m of Game.state.machines) a += Game.def(m.defId).appeal + m.level;
@@ -201,6 +218,8 @@ const Game = {
       const s = JSON.parse(raw);
       s.customers = [];
       if (s.nextEventDay === undefined) s.nextEventDay = 0;
+      if (s.dayVibe === undefined) s.dayVibe = 1;
+      s.competitors.forEach(c => { if (c.points === undefined) c.points = 0; });
       s.machines.forEach(m => { m.busy = null; });
       s.speed = 1;
       Game.state = s;

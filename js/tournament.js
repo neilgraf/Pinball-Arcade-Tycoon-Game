@@ -7,9 +7,30 @@ const Tournament = {
   active: null,   // live tournament object while modal is open
 
   // Days the circuit needs before it will sanction your next event
-  COOLDOWN: { local: 4, regional: 5, national: 7, world: 10 },
+  COOLDOWN: { local: 5, regional: 6, national: 8, world: 12 },
 
   tier(id) { return DATA.TIERS.find(t => t.id === id); },
+
+  /* ---------- circuit rankings ----------
+     Ranking blends earned points with win/loss record; raw skill only
+     breaks ties. Updated live as matches happen (yours and off-screen). */
+  rankScore(p) {
+    return p.points + (p.wins - p.losses) * 0.5 + p.skill * 0.01;
+  },
+  rankings() {
+    return [...Game.state.competitors].sort((a, b) => Tournament.rankScore(b) - Tournament.rankScore(a));
+  },
+  rankOf(p) {
+    return Tournament.rankings().indexOf(p) + 1;
+  },
+
+  /* ---------- skill progression with soft caps ----------
+     Winners improve, losers regress — both taper off near the caps,
+     so nobody rockets to 99 or craters to zero. */
+  skillShift(winner, loser) {
+    winner.skill = Math.min(99, winner.skill + 0.45 * Math.max(0.05, (99 - winner.skill) / 45));
+    loser.skill = Math.max(28, loser.skill - 0.35 * Math.max(0.05, (loser.skill - 28) / 45));
+  },
 
   /* ---------- hosting requirements ---------- */
   checkRequirements(tier) {
@@ -20,6 +41,8 @@ const Tournament = {
         now: `${Game.machineCount()}` },
       { label: `${r.pinball}+ pinball tables`, ok: Game.pinballCount() >= r.pinball,
         now: `${Game.pinballCount()}` },
+      { label: `${r.unique}+ different machine models`, ok: Game.uniqueMachineTypes() >= r.unique,
+        now: `${Game.uniqueMachineTypes()}` },
       { label: `${r.rep}+ reputation`, ok: s.reputation >= r.rep,
         now: `${Math.round(s.reputation)}` },
       { label: `${r.avgCond}%+ avg machine condition`, ok: Game.avgCondition() >= r.avgCond,
@@ -27,6 +50,14 @@ const Tournament = {
       { label: `Venue: ${DATA.EXPANSIONS[r.expansion].name}+`, ok: s.expansion >= r.expansion,
         now: DATA.EXPANSIONS[s.expansion].name },
     ];
+    if (r.star2 > 0) {
+      checks.push({ label: `${r.star2}+ machines upgraded to ★★`, ok: Game.starCount(2) >= r.star2,
+        now: `${Game.starCount(2)}` });
+    }
+    if (r.star3 > 0) {
+      checks.push({ label: `${r.star3}+ machines upgraded to ★★★`, ok: Game.starCount(3) >= r.star3,
+        now: `${Game.starCount(3)}` });
+    }
     if (r.hostedPrev) {
       const prev = Tournament.tier(r.hostedPrev);
       checks.push({ label: `Hosted a ${prev.name}`, ok: (s.hosted[r.hostedPrev] || 0) > 0,
@@ -54,12 +85,21 @@ const Tournament = {
     const s = Game.state;
     Game.expense(tier.hostCost, 'tournament');
 
-    // Field selection: best players show up for bigger events, with some randomness
-    const pool = [...s.competitors]
-      .sort((a, b) => (b.skill + Game.rand(0, 18)) - (a.skill + Game.rand(0, 18)));
-    const entrants = pool.slice(0, tier.entrants);
-    // Seed by skill: 1v8, 4v5 style pairing
-    entrants.sort((a, b) => b.skill - a.skill);
+    // Field selection: entrants must QUALIFY by ranking.
+    // World is strictly the top 32; other tiers draw from the qualified pool
+    // with a little randomness in who shows up.
+    const ranked = Tournament.rankings();
+    let entrants;
+    if (tier.id === 'world') {
+      entrants = ranked.slice(0, tier.entrants);
+    } else {
+      const pool = tier.qualifyRank ? ranked.slice(0, tier.qualifyRank) : ranked;
+      entrants = [...pool]
+        .sort((a, b) => (Tournament.rankScore(b) + Game.rand(0, 12)) - (Tournament.rankScore(a) + Game.rand(0, 12)))
+        .slice(0, tier.entrants);
+    }
+    // Seed by ranking: 1 vs n, 4 vs 5 style pairing
+    entrants.sort((a, b) => Tournament.rankScore(b) - Tournament.rankScore(a));
     const seeds = Tournament.seedOrder(tier.entrants);
     const firstRound = [];
     for (let i = 0; i < tier.entrants; i += 2) {
@@ -99,13 +139,15 @@ const Tournament = {
   },
 
   roundNames(entrants) {
-    const names = { 16: ['Round of 16', 'Quarterfinals', 'Semifinals', 'GRAND FINAL'],
-                    8:  ['Quarterfinals', 'Semifinals', 'GRAND FINAL'] };
+    const names = { 32: ['Round of 32', 'Round of 16', 'Quarterfinals', 'Semifinals', 'GRAND FINAL'],
+                    16: ['Round of 16', 'Quarterfinals', 'Semifinals', 'GRAND FINAL'],
+                    8:  ['Quarterfinals', 'Semifinals', 'GRAND FINAL'],
+                    4:  ['Semifinals', 'GRAND FINAL'] };
     return names[entrants];
   },
 
   /* ---------- match simulation ---------- */
-  simMatch(match, roundIdx, totalRounds) {
+  simMatch(match, roundIdx, totalRounds, tier) {
     const pressure = 1 + roundIdx * 0.35;   // later rounds get wilder
     const score = (p) => {
       const style = DATA.STYLES.find(st => st.id === p.style);
@@ -120,6 +162,9 @@ const Tournament = {
     match.winner = match.s1 > match.s2 ? match.p1 : match.p2;
     const loser = match.winner === match.p1 ? match.p2 : match.p1;
     match.winner.wins++; loser.losses++;
+    // Circuit consequences: ranking points scale with tier and round depth
+    match.winner.points += tier.pointsWin * (roundIdx + 1);
+    Tournament.skillShift(match.winner, loser);
 
     // Commentary selection
     const favored = match.p1.skill >= match.p2.skill ? match.p1 : match.p2;
@@ -153,7 +198,7 @@ const Tournament = {
     const totalRounds = t.roundNames.length;
 
     for (const match of round) {
-      Tournament.simMatch(match, t.currentRound, totalRounds);
+      Tournament.simMatch(match, t.currentRound, totalRounds, t.tier);
       if (match.kind === 'upset') { t.upsets++; t.excitement += 0.08; }
       if (match.kind === 'close') t.excitement += 0.05;
       if (match.kind === 'upset' || match.kind === 'close' || match.kind === 'final') {
@@ -182,21 +227,29 @@ const Tournament = {
     const finalMatch = t.rounds[t.rounds.length - 1][0];
     t.champion = finalMatch.winner;
     t.champion.titles++;
-    t.champion.skill = Math.min(99, t.champion.skill + 1.5);
+    t.champion.points += tier.pointsTitle;
+    t.champion.skill = Math.min(99, t.champion.skill + 1);
     t.finished = true;
 
-    const manager = Sim.hasManager();
-    const revMult = manager ? 1.3 : 1;
-    const repMult = manager ? 1.25 : 1;
+    const mgr = Sim.managerBonus();
+    const revMult = mgr.rev;
+    const repMult = mgr.rep;
 
-    // Spectators: tier draw + your reputation, capped by venue size
+    // Tournament quality: machine condition, cleanliness and event managers
+    // decide how professional the whole thing feels
+    const quality = Game.clamp(
+      0.5 + Game.avgCondition() / 220 + s.cleanliness / 320 + mgr.quality, 0.55, 1.4);
+    t.quality = quality;
+
+    // Spectators: tier draw + reputation + quality + managers, capped by venue size
     const repFactor = 0.55 + s.reputation / tier.req.rep * 0.45;
-    let spectators = Math.round(tier.baseSpectators * repFactor * Game.rand(0.85, 1.15) * t.excitement);
+    let spectators = Math.round(tier.baseSpectators * repFactor * Game.rand(0.8, 1.2)
+      * t.excitement * quality * mgr.spect);
     spectators = Math.min(spectators, DATA.SPECTATOR_CAP[s.expansion]);
 
     const entryRev = tier.entrants * tier.entryFee;
     const ticketRev = Math.round(spectators * tier.ticket * revMult);
-    const sponsorRev = Math.round(tier.sponsorPerRep * s.reputation * revMult);
+    const sponsorRev = Math.round(tier.sponsorPerRep * s.reputation * revMult * quality);
     let snackRev = 0;
     if (Game.hasAmenity('snackbar')) snackRev += Math.round(spectators * 1.1);
     if (Game.hasAmenity('prizes')) snackRev += Math.round(spectators * 0.4);
@@ -207,15 +260,15 @@ const Tournament = {
     if (snackRev > 0) Game.income(snackRev, 'snacks');
     Game.expense(tier.prize, 'tournament');
 
-    const repGain = Math.round(tier.repReward * t.excitement * repMult);
+    const repGain = Math.round(tier.repReward * Math.min(t.excitement, 1.4) * quality * repMult);
     s.reputation = Game.clamp(s.reputation + repGain, 0, 1000);
 
     // Event wear: machines take a beating, place gets messy
     for (const m of s.machines) {
       if (Game.def(m.defId).type === 'amenity') continue;
-      m.condition = Math.max(5, m.condition - Game.rand(4, 10));
+      m.condition = Math.max(5, m.condition - Game.rand(5, 12));
     }
-    s.cleanliness = Math.max(0, s.cleanliness - 20);
+    s.cleanliness = Math.max(0, s.cleanliness - (20 + spectators / 40));
 
     // Post-event buzz drives traffic for days
     const buzzLen = { local: 2, regional: 3, national: 4, world: 6 }[tier.id];
@@ -233,6 +286,9 @@ const Tournament = {
       prize: tier.prize, hostCost: tier.hostCost,
       net: entryRev + ticketRev + sponsorRev + snackRev - tier.prize - tier.hostCost,
       repGain,
+      quality,
+      mgrEff: mgr.eff,
+      mgrRevPct: Math.round((mgr.rev - 1) * 100),
     };
 
     Game.addNews(`🏆 ${Tournament.displayName(t.champion)} wins the ${tier.name}! +${repGain} reputation.`, 'good');
