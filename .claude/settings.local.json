@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "PowerShell(python --version)",
-      "PowerShell(node --version)"
+      "PowerShell(node --version)",
+      "Bash(python -)",
+      "Bash(node -e ' *)",
+      "Bash(node \"C:\\\\Users\\\\neil3\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-neil3-OneDrive-Desktop-ArcadeTycoon\\\\877754cc-2f67-4888-9492-9eceee4a1874\\\\scratchpad\\\\repreq.js\")"
     ]
   }
 }

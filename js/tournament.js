@@ -32,17 +32,18 @@ const Tournament = {
     loser.skill = Math.max(28, loser.skill - 0.35 * Math.max(0.05, (loser.skill - 28) / 45));
   },
 
-  /* ---------- hosting requirements ---------- */
+  /* ---------- hosting requirements ----------
+     V3: variety, upgrades and condition are the pillars —
+     N DIFFERENT pinball tables, half of them ★★★, none in Poor shape. */
   checkRequirements(tier) {
     const s = Game.state;
     const r = tier.req;
+    const worstPb = Game.worstPinballCond();
     const checks = [
-      { label: `${r.machines}+ machines`, ok: Game.machineCount() >= r.machines,
-        now: `${Game.machineCount()}` },
-      { label: `${r.pinball}+ pinball tables`, ok: Game.pinballCount() >= r.pinball,
-        now: `${Game.pinballCount()}` },
-      { label: `${r.unique}+ different machine models`, ok: Game.uniqueMachineTypes() >= r.unique,
-        now: `${Game.uniqueMachineTypes()}` },
+      { label: `${r.pinballUnique} DIFFERENT pinball tables`, ok: Game.uniquePinballTypes() >= r.pinballUnique,
+        now: `${Game.uniquePinballTypes()}` },
+      { label: `No pinball table in Poor condition (<${r.minPinballCond}%)`, ok: Game.pinballCount() > 0 && worstPb >= r.minPinballCond,
+        now: Game.pinballCount() > 0 ? `worst ${Math.round(worstPb)}%` : 'no tables' },
       { label: `${r.rep}+ reputation`, ok: s.reputation >= r.rep,
         now: `${Math.round(s.reputation)}` },
       { label: `${r.avgCond}%+ avg machine condition`, ok: Game.avgCondition() >= r.avgCond,
@@ -50,13 +51,10 @@ const Tournament = {
       { label: `Venue: ${DATA.EXPANSIONS[r.expansion].name}+`, ok: s.expansion >= r.expansion,
         now: DATA.EXPANSIONS[s.expansion].name },
     ];
-    if (r.star2 > 0) {
-      checks.push({ label: `${r.star2}+ machines upgraded to ★★`, ok: Game.starCount(2) >= r.star2,
-        now: `${Game.starCount(2)}` });
-    }
-    if (r.star3 > 0) {
-      checks.push({ label: `${r.star3}+ machines upgraded to ★★★`, ok: Game.starCount(3) >= r.star3,
-        now: `${Game.starCount(3)}` });
+    if (r.star3Pct > 0) {
+      checks.splice(1, 0, { label: `${r.star3Pct}%+ of pinball tables MAX upgraded (★★★)`,
+        ok: Game.pinballStar3Pct() >= r.star3Pct,
+        now: `${Math.round(Game.pinballStar3Pct())}%` });
     }
     if (r.hostedPrev) {
       const prev = Tournament.tier(r.hostedPrev);
@@ -235,10 +233,15 @@ const Tournament = {
     const revMult = mgr.rev;
     const repMult = mgr.rep;
 
-    // Tournament quality: machine condition, cleanliness and event managers
-    // decide how professional the whole thing feels
+    // Tournament quality: table upgrades, condition, cleanliness and event
+    // managers decide how professional the whole thing feels. Worn tables
+    // (below Good) actively drag the event down.
+    const pb = Game.pinballMachines();
+    const starAvg = pb.length ? pb.reduce((a, m) => a + m.level, 0) / pb.length : 0;
+    const goodShare = pb.length ? pb.filter(m => m.condition >= 65).length / pb.length : 0;
     const quality = Game.clamp(
-      0.5 + Game.avgCondition() / 220 + s.cleanliness / 320 + mgr.quality, 0.55, 1.4);
+      0.35 + Game.avgCondition() / 260 + s.cleanliness / 400
+      + starAvg * 0.12 + goodShare * 0.25 + mgr.quality, 0.5, 1.5);
     t.quality = quality;
 
     // Spectators: tier draw + reputation + quality + managers, capped by venue size
@@ -250,9 +253,13 @@ const Tournament = {
     const entryRev = tier.entrants * tier.entryFee;
     const ticketRev = Math.round(spectators * tier.ticket * revMult);
     const sponsorRev = Math.round(tier.sponsorPerRep * s.reputation * revMult * quality);
+    // Concessions during the event — staffed amenities feed the crowd
+    const svcRatio = Sim.attendantRatio();
     let snackRev = 0;
-    if (Game.hasAmenity('snackbar')) snackRev += Math.round(spectators * 1.1);
-    if (Game.hasAmenity('prizes')) snackRev += Math.round(spectators * 0.4);
+    if (Game.hasAmenity('snackbar'))   snackRev += Math.round(spectators * 1.1 * svcRatio);
+    if (Game.hasAmenity('foodstand'))  snackRev += Math.round(spectators * 1.5 * svcRatio);
+    if (Game.hasAmenity('drinkstand')) snackRev += Math.round(spectators * 0.8 * svcRatio);
+    if (Game.hasAmenity('prizes'))     snackRev += Math.round(spectators * 0.4 * svcRatio);
 
     Game.income(entryRev, 'tournament');
     Game.income(ticketRev, 'tournament');
@@ -263,12 +270,12 @@ const Tournament = {
     const repGain = Math.round(tier.repReward * Math.min(t.excitement, 1.4) * quality * repMult);
     s.reputation = Game.clamp(s.reputation + repGain, 0, 1000);
 
-    // Event wear: machines take a beating, place gets messy
+    // Event wear: machines take a beating, and the crowd trashes the floor
     for (const m of s.machines) {
       if (Game.def(m.defId).type === 'amenity') continue;
-      m.condition = Math.max(5, m.condition - Game.rand(5, 12));
+      m.condition = Math.max(5, m.condition - Game.rand(7, 16));
     }
-    s.cleanliness = Math.max(0, s.cleanliness - (20 + spectators / 40));
+    Game.spawnDirt(4 + Math.round(spectators / 60));
 
     // Post-event buzz drives traffic for days
     const buzzLen = { local: 2, regional: 3, national: 4, world: 6 }[tier.id];

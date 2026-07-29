@@ -6,6 +6,8 @@ const UI = {
   modalOpen: false,
   tickerQueue: [],
   tickerBusy: false,
+  _dragStart: null,
+  _dragging: false,
 
   /* ================= INIT ================= */
   init() {
@@ -38,14 +40,23 @@ const UI = {
       UI.refreshPriceLabel();
     };
     document.getElementById('btnExpand').onclick = UI.tryExpand;
-    document.getElementById('btnClean').onclick = () => {
-      if (Game.state.cash < 60) { UI.pushTicker('Not enough cash for a deep clean ($60).', 'bad'); return; }
-      Game.expense(60, 'utilities');
-      Game.state.cleanliness = Math.min(100, Game.state.cleanliness + 45);
-      UI.pushTicker('🧼 Deep clean complete! +45 cleanliness.', 'good');
-      UI.refreshStats();
-    };
+    document.getElementById('btnClean').onclick = UI.deepClean;
   },
+
+  deepClean() {
+    const s = Game.state;
+    const n = s.dirtTiles.length;
+    if (n === 0) { UI.pushTicker('The floor is already spotless.', 'good'); return; }
+    const cost = UI.deepCleanCost();
+    if (s.cash < cost) { UI.pushTicker(`Not enough cash for an emergency deep clean (${Game.money(cost)}).`, 'bad'); return; }
+    Game.expense(cost, 'utilities');
+    s.staff.forEach(st => { if (st.task && st.task.kind === 'clean') st.task = null; });
+    s.dirtTiles = [];
+    Game.recalcCleanliness();
+    UI.pushTicker(`🧼 Emergency crew scrubbed ${n} dirty spot${n > 1 ? 's' : ''} for ${Game.money(cost)}.`, 'good');
+    UI.refreshStats();
+  },
+  deepCleanCost() { return 40 + 18 * Game.state.dirtTiles.length; },
 
   setSpeed(spd) {
     Game.state.speed = spd;
@@ -54,52 +65,120 @@ const UI = {
     }
   },
 
-  /* ================= CANVAS INTERACTION ================= */
+  /* ================= CANVAS INTERACTION =================
+     Click = select machine / flag a dirt tile.
+     Drag = box-select multiple dirt tiles for the janitors. */
   bindCanvas() {
     const cv = document.getElementById('gameCanvas');
     cv.addEventListener('mousemove', (e) => {
       const w = Render.toWorld(e.clientX, e.clientY);
       Render.hoverTile = { x: Math.floor(w.x), y: Math.floor(w.y) };
+      if (UI._dragStart && !Render.placingDef && !Render.movingMachine) {
+        const dx = w.x - UI._dragStart.x, dy = w.y - UI._dragStart.y;
+        if (UI._dragging || Math.hypot(dx, dy) > 0.35) {
+          UI._dragging = true;
+          Render.selectBox = { x0: UI._dragStart.x, y0: UI._dragStart.y, x1: w.x, y1: w.y };
+        }
+      }
     });
-    cv.addEventListener('mouseleave', () => { Render.hoverTile = null; });
-    cv.addEventListener('click', (e) => {
+    cv.addEventListener('mouseleave', () => {
+      Render.hoverTile = null;
+      UI._dragStart = null;
+      UI._dragging = false;
+      Render.selectBox = null;
+    });
+    cv.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      UI._dragStart = Render.toWorld(e.clientX, e.clientY);
+      UI._dragging = false;
+    });
+    cv.addEventListener('mouseup', (e) => {
+      if (e.button !== 0) return;
       const w = Render.toWorld(e.clientX, e.clientY);
-      const x = Math.floor(w.x), y = Math.floor(w.y);
-
-      if (Render.placingDef) {
-        if (Game.tileFree(x, y)) {
-          const def = Game.def(Render.placingDef);
-          if (Game.state.cash >= def.cost) {
-            Game.placeMachine(Render.placingDef, x, y);
-            UI.pushTicker(`🕹️ ${def.name} installed!`, 'good');
-            if (!e.shiftKey || Game.state.cash < def.cost) UI.cancelPlacement();
-            UI.refreshAll();
-          } else {
-            UI.pushTicker('Not enough cash!', 'bad');
-            UI.cancelPlacement();
+      if (UI._dragging) {
+        // Box-flag every dirt tile inside the selection
+        const b = Render.selectBox;
+        const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1);
+        const y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+        let flagged = 0;
+        for (const d of Game.state.dirtTiles) {
+          if (d.x + 0.5 >= x0 && d.x + 0.5 <= x1 && d.y + 0.5 >= y0 && d.y + 0.5 <= y1 && !d.flagged) {
+            d.flagged = true;
+            flagged++;
           }
         }
-        return;
-      }
-      if (Render.movingMachine) {
-        if (Game.tileFree(x, y)) {
-          Render.movingMachine.x = x;
-          Render.movingMachine.y = y;
-          Render.movingMachine = null;
-          document.getElementById('placeHint').style.display = 'none';
-          UI.refreshAll();
+        if (flagged > 0) {
+          if (Sim.staffCount('janitor') === 0) UI.pushTicker(`⚠️ ${flagged} tile${flagged > 1 ? 's' : ''} flagged — but you have no janitors to clean them!`, 'bad');
+          else UI.pushTicker(`🧹 Flagged ${flagged} dirty tile${flagged > 1 ? 's' : ''} for the janitors.`, 'good');
         }
-        return;
+      } else {
+        UI.canvasClick(w, e);
       }
-      const m = Game.machineAt(x, y);
-      Game.state.selectedMachine = m ? m.id : null;
-      UI.refreshInspector();
+      UI._dragStart = null;
+      UI._dragging = false;
+      Render.selectBox = null;
     });
     cv.addEventListener('contextmenu', (e) => { e.preventDefault(); UI.cancelPlacement(); });
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { UI.cancelPlacement(); UI.closeModalSafe(); }
       if (e.key === ' ' && !UI.modalOpen) { e.preventDefault(); UI.setSpeed(Game.state.speed === 0 ? 1 : 0); }
     });
+  },
+
+  canvasClick(w, e) {
+    const x = Math.floor(w.x), y = Math.floor(w.y);
+
+    if (Render.placingDef) {
+      if (Game.tileFree(x, y)) {
+        const def = Game.def(Render.placingDef);
+        if (Game.state.cash >= def.cost) {
+          Game.placeMachine(Render.placingDef, x, y);
+          UI.pushTicker(`🕹️ ${def.name} installed!`, 'good');
+          if (!e.shiftKey || Game.state.cash < def.cost) UI.cancelPlacement();
+          UI.refreshAll();
+        } else {
+          UI.pushTicker('Not enough cash!', 'bad');
+          UI.cancelPlacement();
+        }
+      }
+      return;
+    }
+    if (Render.movingMachine) {
+      if (Game.tileFree(x, y)) {
+        Render.movingMachine.x = x;
+        Render.movingMachine.y = y;
+        Render.movingMachine = null;
+        document.getElementById('placeHint').style.display = 'none';
+        UI.refreshAll();
+      }
+      return;
+    }
+    const m = Game.machineAt(x, y);
+    if (m) {
+      Game.state.selectedMachine = m.id;
+      UI.refreshInspector();
+      return;
+    }
+    // Dirt tile: toggle the cleaning flag
+    const d = Game.dirtAt(x, y);
+    if (d) {
+      if (d.flagged) {
+        d.flagged = false;
+        if (d.assigned !== null) {
+          const jan = Game.state.staff.find(st => st.id === d.assigned);
+          if (jan) jan.task = null;
+          d.assigned = null;
+        }
+        UI.pushTicker('Cleaning flag removed.', '');
+      } else {
+        d.flagged = true;
+        if (Sim.staffCount('janitor') === 0) UI.pushTicker('⚠️ Flagged for cleaning — but you have no janitors!', 'bad');
+        else UI.pushTicker('🧹 Flagged for cleaning.', 'good');
+      }
+      return;
+    }
+    Game.state.selectedMachine = null;
+    UI.refreshInspector();
   },
 
   cancelPlacement() {
@@ -113,7 +192,11 @@ const UI = {
   buildShop() {
     const list = document.getElementById('shopList');
     list.innerHTML = '';
-    const groups = [['pinball', '🎯 Pinball Tables'], ['arcade', '🕹️ Arcade Cabinets'], ['amenity', '🍿 Amenities']];
+    const groups = [
+      ['pinball', '🎯 Pinball Tables — tournaments & play revenue'],
+      ['arcade', '🕹️ Arcade & Claws — appeal & reputation'],
+      ['amenity', '🍿 Amenities — needs & appeal'],
+    ];
     for (const [type, label] of groups) {
       const h = document.createElement('div');
       h.className = 'shop-group';
@@ -123,12 +206,15 @@ const UI = {
         const el = document.createElement('div');
         el.className = 'shop-item';
         el.id = 'shop_' + def.id;
+        const meta2 = def.type === 'amenity'
+          ? `Appeal ${def.appeal}${def.needsStaff ? ' · needs attendant' : ''}`
+          : `Pop ${def.pop}${def.appeal ? ' · Appeal ' + def.appeal : ''} · Rel ${def.rel}`;
         el.innerHTML = `
           <div class="shop-swatch" style="background:hsl(${def.hue},60%,45%)"></div>
           <div class="shop-info">
             <div class="shop-name">${def.name}</div>
             <div class="shop-meta">${Game.money(def.cost)}${def.price ? ' · ' + Game.money(def.price) + '/play' : ''}</div>
-            <div class="shop-meta dim">${def.pop ? 'Pop ' + def.pop + ' · ' : ''}Appeal ${def.appeal}${def.rel < 10 ? ' · Rel ' + def.rel : ''}</div>
+            <div class="shop-meta dim">${meta2}</div>
           </div>`;
         el.title = def.blurb;
         el.onclick = () => {
@@ -178,7 +264,7 @@ const UI = {
     UI.refreshAll();
   },
 
-  /* ================= STAT BAR ================= */
+  /* ================= STAT BAR & ALERTS ================= */
   refreshStats() {
     const s = Game.state;
     document.getElementById('statCash').textContent = Game.money(s.cash);
@@ -188,7 +274,10 @@ const UI = {
     document.getElementById('statSat').textContent = Math.round(s.satisfaction) + '%';
     document.getElementById('statSat').className = 'stat-value ' + (s.satisfaction < 45 ? 'bad' : s.satisfaction > 70 ? 'good' : '');
     document.getElementById('statClean').textContent = Math.round(s.cleanliness) + '%';
-    document.getElementById('statClean').className = 'stat-value ' + (s.cleanliness < 45 ? 'bad' : '');
+    document.getElementById('statClean').className = 'stat-value ' + (s.cleanliness < 45 ? 'bad' : s.cleanliness < 65 ? 'warn' : '');
+    const cleanBtn = document.getElementById('btnClean');
+    cleanBtn.textContent = `🧼 ${Game.money(UI.deepCleanCost())}`;
+    cleanBtn.title = `Emergency deep clean: instantly clears all ${s.dirtTiles.length} dirty tiles`;
     document.getElementById('statDay').textContent = 'Day ' + s.day;
     // Clock: arcade open 10:00 → 24:00
     const hours = 10 + s.time * 14;
@@ -202,24 +291,64 @@ const UI = {
     } else {
       document.getElementById('buzzBadge').style.display = 'none';
     }
+    UI.refreshAlerts();
+  },
+
+  /* Persistent on-screen warnings for things that need the boss */
+  refreshAlerts() {
+    const s = Game.state;
+    const el = document.getElementById('alertBar');
+    if (!el) return;
+    const alerts = [];
+    const unassignedBroken = s.machines.filter(m =>
+      m.broken && !Game.queueEntry(m.id) && !Game.techOnMachine(m.id)).length;
+    if (unassignedBroken > 0)
+      alerts.push({ cls: 'bad', text: `🔴 ${unassignedBroken} broken — click machine to assign repair` });
+    if (Sim.staffCount('tech') === 0 && s.repairQueue.length > 0)
+      alerts.push({ cls: 'bad', text: '🔧 Repairs queued but no technicians hired!' });
+    if (s.cleanliness < 45)
+      alerts.push({ cls: 'bad', text: '🧹 FILTHY — flag dirt tiles or guests will leave' });
+    else if (s.cleanliness < 65)
+      alerts.push({ cls: 'warn', text: '🧹 Getting dirty — click/drag dirt tiles to assign janitors' });
+    const unflagged = s.dirtTiles.filter(d => !d.flagged).length;
+    if (unflagged > 0 && Sim.staffCount('janitor') > 0 && s.cleanliness < 80 && s.cleanliness >= 65)
+      alerts.push({ cls: 'warn', text: `🗑 ${unflagged} dirty spot${unflagged > 1 ? 's' : ''} not flagged for cleaning` });
+    if (Sim.attendantDeficit() > 0)
+      alerts.push({ cls: 'warn', text: `🍿 Amenities understaffed (${Sim.staffCount('attendant')}/${Sim.attendantsNeeded()} attendants)` });
+    const poor = Game.poorCondCount();
+    if (poor > 0)
+      alerts.push({ cls: 'warn', text: `⚠️ ${poor} machine${poor > 1 ? 's' : ''} in POOR condition — tournaments disqualified` });
+    const html = alerts.map(a => `<div class="alert-chip ${a.cls}">${a.text}</div>`).join('');
+    if (html !== UI._alertHtml) {   // called every frame — only touch the DOM on change
+      UI._alertHtml = html;
+      el.innerHTML = html;
+      el.style.display = alerts.length ? 'flex' : 'none';
+    }
   },
 
   refreshPriceLabel() {
     const p = Game.state.priceLevel;
     const el = document.getElementById('priceLabel');
-    el.textContent = `Pricing: ${Math.round(p * 100)}%`;
-    el.className = p > 1.4 ? 'bad' : p < 0.8 ? 'good' : '';
+    let note = '';
+    if (p <= 0.7) note = ' — crowd magnet';
+    else if (p <= 0.85) note = ' — happy guests';
+    else if (p >= 1.5) note = ' — gouging!';
+    else if (p >= 1.25) note = ' — unhappy guests';
+    el.textContent = `Pricing: ${Math.round(p * 100)}%${note}`;
+    el.className = p >= 1.25 ? 'bad' : p <= 0.85 ? 'good' : '';
   },
 
   refreshExpandBtn() {
     const s = Game.state;
     const btn = document.getElementById('btnExpand');
     if (s.expansion >= DATA.EXPANSIONS.length - 1) {
-      btn.textContent = '🏟️ ' + DATA.EXPANSIONS[s.expansion].name + ' (MAX)';
+      btn.textContent = '🏟️ Max size';
+      btn.title = `${DATA.EXPANSIONS[s.expansion].name} — fully expanded`;
       btn.disabled = true;
     } else {
       const next = DATA.EXPANSIONS[s.expansion + 1];
-      btn.textContent = `🏗️ Expand: ${next.name} — ${Game.money(next.cost)}`;
+      btn.textContent = '🏗️ Expand';
+      btn.title = `Expand to the ${next.name} (${next.w}×${next.h}) — ${Game.money(next.cost)}`;
       btn.disabled = false;
     }
   },
@@ -240,47 +369,117 @@ const UI = {
     if (!m) { panel.style.display = 'none'; return; }
     const def = Game.def(m.defId);
     panel.style.display = 'block';
-    const condClass = m.condition > 60 ? 'good' : m.condition > 30 ? 'warn' : 'bad';
+    const band = Game.condBand(m.condition);
     const upgCost = Game.upgradeCost(m);
-    const repCost = Game.repairCost(m);
+    const emergCost = Game.emergencyRepairCost(m);
     const isAmenity = def.type === 'amenity';
+    const queued = Game.queueEntry(m.id);
+    const tech = Game.techOnMachine(m.id);
+    const techs = Sim.staffCount('tech');
+
+    // Status line
+    let statusHtml;
+    if (m.broken) statusHtml = '<b class="bad">🔴 OUT OF ORDER</b>';
+    else if (m.busy !== null) statusHtml = '<b class="good">🎮 In use</b>';
+    else statusHtml = '<b class="good">🟢 Ready</b>';
+
+    // Staff assignment line
+    let assignHtml = '';
+    if (tech) {
+      const doing = tech.task.phase === 'work'
+        ? (tech.task.kind === 'repair' ? 'repairing now' : 'tuning now')
+        : 'on the way';
+      assignHtml = `<div class="insp-row"><span>Technician</span><b class="good">🔧 ${tech.name} — ${doing}</b></div>`;
+    } else if (queued) {
+      assignHtml = `<div class="insp-row"><span>Repair queue</span><b class="warn">🕐 #${queued.index + 1} in line</b></div>`;
+    }
+
+    // Action buttons
+    const actions = [];
+    if (m.broken) {
+      if (!tech && !queued) {
+        actions.push(`<button class="btn primary" onclick="UI.assignTask(${m.id},'repair')" ${techs === 0 ? 'title="Hire a technician first!"' : ''}>🔧 Assign Repair</button>`);
+      } else {
+        actions.push(`<button class="btn" onclick="UI.cancelMachineTask(${m.id})">✕ Cancel Repair</button>`);
+      }
+      actions.push(`<button class="btn" onclick="UI.emergencyRepair(${m.id})" ${s.cash < emergCost ? 'disabled' : ''}>⚡ Emergency ${Game.money(emergCost)}</button>`);
+    } else if (!isAmenity && m.condition < 95) {
+      if (!tech && !queued) {
+        actions.push(`<button class="btn" onclick="UI.assignTask(${m.id},'maintain')" ${techs === 0 ? 'title="Hire a technician first!"' : ''}>🛠 Assign Maintenance</button>`);
+      } else {
+        actions.push(`<button class="btn" onclick="UI.cancelMachineTask(${m.id})">✕ Cancel Task</button>`);
+      }
+    }
+    if (!isAmenity && m.level < 3) {
+      actions.push(`<button class="btn" onclick="UI.upgradeMachine(${m.id})" ${s.cash < upgCost ? 'disabled' : ''}>⬆ Upgrade ${Game.money(upgCost)}</button>`);
+    }
+    actions.push(`<button class="btn" onclick="UI.moveMachine(${m.id})">↔ Move</button>`);
+    actions.push(`<button class="btn danger" onclick="UI.sellMachine(${m.id})">💸 Sell</button>`);
+
+    // Amenity staffing note
+    let amenityHtml = '';
+    if (isAmenity && def.needsStaff) {
+      const ratio = Sim.attendantRatio();
+      amenityHtml = `<div class="insp-row"><span>Service staff</span>
+        <b class="${ratio >= 1 ? 'good' : 'bad'}">${ratio >= 1 ? '✓ Staffed' : `⚠ Understaffed (${Sim.staffCount('attendant')}/${Sim.attendantsNeeded()})`}</b></div>
+      ${ratio < 1 ? '<div class="insp-blurb bad">Guests are walking away from slow service. Hire attendants in the Staff panel.</div>' : ''}`;
+    }
+
     panel.innerHTML = `
       <div class="insp-head" style="border-color:hsl(${def.hue},70%,50%)">
         <span class="insp-title">${def.name}${m.level > 0 ? ' ' + '★'.repeat(m.level) : ''}</span>
         <button class="btn-x" onclick="UI.deselect()">✕</button>
       </div>
       <div class="insp-blurb">${def.blurb}</div>
-      ${isAmenity ? '' : `
-      <div class="insp-row"><span>Status</span><b class="${m.broken ? 'bad' : 'good'}">${m.broken ? '🔴 OUT OF ORDER' : m.busy !== null ? '🎮 In use' : '🟢 Ready'}</b></div>
-      <div class="insp-row"><span>Condition</span><b class="${condClass}">${Math.round(m.condition)}%</b></div>
-      <div class="insp-bar"><div class="insp-bar-fill ${condClass}" style="width:${m.condition}%"></div></div>
+      ${isAmenity ? amenityHtml : `
+      <div class="insp-row"><span>Status</span>${statusHtml}</div>
+      <div class="insp-row"><span>Condition</span><b class="${band.cls}">${Math.round(m.condition)}% — ${band.label}</b></div>
+      <div class="insp-bar"><div class="insp-bar-fill ${band.cls}" style="width:${m.condition}%"></div></div>
+      ${assignHtml}
       <div class="insp-row"><span>Price/play</span><b>${Game.money(Game.machinePrice(m))}</b></div>
-      ${m.condition < 60 && !m.broken ? '<div class="insp-blurb bad">⚠️ Low condition is cutting this machine\'s earnings — repair or maintain it.</div>' : ''}
+      ${m.condition < 40 && !m.broken ? '<div class="insp-blurb bad">⚠️ POOR condition: earnings slashed and tournaments DISQUALIFIED. Assign maintenance!</div>'
+        : m.condition < 65 && !m.broken ? '<div class="insp-blurb bad">⚠️ Worn: earning less and dragging tournament quality down.</div>' : ''}
       <div class="insp-row"><span>Total plays</span><b>${m.plays}</b></div>
       <div class="insp-row"><span>Lifetime revenue</span><b>${Game.money(m.revenue)}</b></div>
       `}
-      <div class="insp-actions">
-        ${m.broken ? `<button class="btn primary" onclick="UI.repairMachine(${m.id})" ${s.cash < repCost ? 'disabled' : ''}>🔧 Repair ${Game.money(repCost)}</button>` : ''}
-        ${!isAmenity && m.level < 3 ? `<button class="btn" onclick="UI.upgradeMachine(${m.id})" ${s.cash < upgCost ? 'disabled' : ''}>⬆ Upgrade ${Game.money(upgCost)}</button>` : ''}
-        <button class="btn" onclick="UI.moveMachine(${m.id})">↔ Move</button>
-        <button class="btn danger" onclick="UI.sellMachine(${m.id})">💸 Sell</button>
-      </div>`;
+      <div class="insp-actions">${actions.join('')}</div>`;
   },
 
   deselect() {
     Game.state.selectedMachine = null;
     UI.refreshInspector();
   },
-  repairMachine(id) {
+  assignTask(id, kind) {
     const m = Game.state.machines.find(x => x.id === id);
     if (!m) return;
-    const cost = Game.repairCost(m);
+    if (Sim.staffCount('tech') === 0) {
+      UI.pushTicker('⚠️ No technicians on payroll — hire one in the Staff panel!', 'bad');
+      return;
+    }
+    if (Game.enqueueTask(id, kind)) {
+      const pos = Game.state.repairQueue.length;
+      UI.pushTicker(kind === 'repair'
+        ? `🔧 ${Game.def(m.defId).name} queued for repair (#${pos} in line).`
+        : `🛠 ${Game.def(m.defId).name} queued for maintenance (#${pos} in line).`, 'good');
+    }
+    UI.refreshInspector();
+  },
+  cancelMachineTask(id) {
+    Game.cancelTask(id);
+    UI.pushTicker('Task cancelled.', '');
+    UI.refreshInspector();
+  },
+  emergencyRepair(id) {
+    const m = Game.state.machines.find(x => x.id === id);
+    if (!m || !m.broken) return;
+    const cost = Game.emergencyRepairCost(m);
     if (Game.state.cash < cost) return;
     Game.expense(cost, 'repairs');
+    Game.cancelTask(id);
     m.broken = false;
     m.repair = 0;
     m.condition = 100;
-    UI.pushTicker(`🔧 ${Game.def(m.defId).name} repaired to mint condition.`, 'good');
+    UI.pushTicker(`⚡ Emergency contractor fixed ${Game.def(m.defId).name} — pricey but instant.`, 'good');
     UI.refreshAll();
   },
   upgradeMachine(id) {
@@ -372,9 +571,10 @@ const UI = {
       .sort((a, b) => b.revenue - a.revenue).slice(0, 6);
     const bestRows = best.map(m => {
       const def = Game.def(m.defId);
+      const band = Game.condBand(m.condition);
       return `<tr><td>${def.name}${m.level ? ' ' + '★'.repeat(m.level) : ''}</td>
         <td>${m.plays}</td><td>${Game.money(m.revenue)}</td>
-        <td class="${m.condition > 60 ? 'good' : m.condition > 30 ? 'warn' : 'bad'}">${Math.round(m.condition)}%</td></tr>`;
+        <td class="${band.cls}">${Math.round(m.condition)}%</td></tr>`;
     }).join('') || '<tr><td colspan="4" class="dim">No machines yet</td></tr>';
 
     const last = s.history[s.history.length - 1];
@@ -407,18 +607,35 @@ const UI = {
           <div class="insp-row"><span>Total guests</span><b>${s.totalStats.customers.toLocaleString()}</b></div>
           <div class="insp-row"><span>Tournaments hosted</span><b>${s.totalStats.tournaments}</b></div>
           <div class="insp-row"><span>Venue</span><b>${DATA.EXPANSIONS[s.expansion].name}</b></div>
+          <div class="insp-row"><span>Arcade appeal</span><b>${Game.arcadeAppeal()} (draws the crowd)</b></div>
           <div class="insp-row"><span>Reputation</span><b>${Math.round(s.reputation)} / 1000 — ${Game.repTier().label}</b></div>
         </div>
       </div>`, true);
   },
 
   catName(k) {
-    return { plays: '🕹️ Machine plays', snacks: '🍿 Concessions', tournament: '🏆 Tournament', sponsors: '🤝 Sponsors',
+    return { plays: '🕹️ Machine plays', snacks: '🎁 Prizes & extras', food: '🍔 Food', drinks: '🥤 Drinks',
+      tournament: '🏆 Tournament', sponsors: '🤝 Sponsors',
       sales: '💸 Machine sales', machines: '🛒 Machines bought', wages: '👥 Wages', utilities: '💡 Utilities',
       repairs: '🔧 Repairs', upgrades: '⬆ Upgrades', expansion: '🏗️ Expansion' }[k] || k;
   },
 
   /* ================= STAFF ================= */
+  staffTaskLabel(st) {
+    if (st.type === 'attendant') {
+      const stands = Game.serviceAmenities();
+      const idx = Game.state.staff.filter(x => x.type === 'attendant').indexOf(st);
+      return idx < stands.length ? `Running ${Game.def(stands[idx].defId).name}` : 'No stand to run';
+    }
+    if (st.type === 'manager') return 'Planning events';
+    if (!st.task) return 'Idle — waiting for assignments';
+    if (st.task.kind === 'clean') return st.task.phase === 'work' ? 'Scrubbing a dirty tile' : 'Walking to a dirty tile';
+    const m = Game.state.machines.find(x => x.id === st.task.machineId);
+    const name = m ? Game.def(m.defId).name : 'machine';
+    if (st.task.kind === 'repair') return st.task.phase === 'work' ? `Repairing ${name}` : `Heading to ${name}`;
+    return st.task.phase === 'work' ? `Tuning ${name}` : `Heading to ${name}`;
+  },
+
   openStaff() {
     const s = Game.state;
     const cards = Object.entries(DATA.STAFF).map(([type, info]) => `
@@ -431,41 +648,47 @@ const UI = {
     // Staffing status: does the crew match the size of the operation?
     const techHave = Sim.staffCount('tech'), techNeed = Sim.techsNeeded();
     const janHave = Sim.staffCount('janitor'), janNeed = Sim.janitorsNeeded();
+    const attHave = Sim.staffCount('attendant'), attNeed = Sim.attendantsNeeded();
     const mgr = Sim.managerBonus();
     const needRow = (icon, label, have, need) => {
       const ok = have >= need;
       return `<div class="insp-row"><span>${icon} ${label}</span>
-        <b class="${ok ? 'good' : 'bad'}">${have} / ${need} needed${ok ? '' : ' ⚠️'}</b></div>`;
+        <b class="${ok ? 'good' : 'bad'}">${have} / ${need} recommended${ok ? '' : ' ⚠️'}</b></div>`;
     };
+    const queueN = s.repairQueue.length + s.staff.filter(st => st.task && st.task.kind !== 'clean').length;
+    const flaggedN = s.dirtTiles.filter(d => d.flagged).length;
     const statusCard = `
       <div class="dash-card">
         <h3>📋 Staffing status — ${Game.machineCount()} machines, ${DATA.EXPANSIONS[s.expansion].name}</h3>
         ${needRow('🔧', 'Technicians', techHave, techNeed)}
-        ${techHave < techNeed ? '<div class="insp-blurb bad">Understaffed: machines wear +35% faster and break down more often.</div>' : ''}
+        <div class="insp-row"><span>Repair/maintenance jobs open</span><b class="${queueN > techHave ? 'warn' : ''}">${queueN}</b></div>
         ${needRow('🧹', 'Janitors', janHave, janNeed)}
-        ${janHave < janNeed ? '<div class="insp-blurb bad">Understaffed: dirt piles up faster, hurting satisfaction and reputation.</div>' : ''}
+        <div class="insp-row"><span>Dirt tiles flagged / total</span><b class="${s.dirtTiles.length > 8 ? 'warn' : ''}">${flaggedN} / ${s.dirtTiles.length}</b></div>
+        ${needRow('🍿', 'Attendants', attHave, attNeed)}
+        ${attHave < attNeed ? '<div class="insp-blurb bad">Understaffed amenities serve slowly — guests walk away unhappy and unfed.</div>' : ''}
         <div class="insp-row"><span>📋 Event Manager bonus</span>
           <b class="${mgr.eff > 0 ? 'good' : ''}">${mgr.eff > 0
             ? `+${Math.round((mgr.rev - 1) * 100)}% revenue · +${Math.round((mgr.spect - 1) * 100)}% attendance · +${Math.round((mgr.rep - 1) * 100)}% rep`
             : 'none'}</b></div>
-        <div class="insp-blurb">Managers stack with diminishing returns; higher-level managers give stronger bonuses.</div>
+        <div class="insp-blurb">Remember: techs and janitors only work jobs YOU assign — click broken machines and dirty tiles.</div>
       </div>`;
     const roster = s.staff.map(st => {
       const info = DATA.STAFF[st.type];
       return `<tr><td>${info.icon} ${st.name}</td><td>${info.name}</td><td>Lv.${st.level}</td>
+        <td class="dim">${UI.staffTaskLabel(st)}</td>
         <td>${Game.money(info.wage)}/day</td>
         <td><button class="btn danger small" onclick="UI.fireStaff(${st.id})">Fire</button></td></tr>`;
-    }).join('') || '<tr><td colspan="5" class="dim">No staff hired. The place runs on hope alone.</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="dim">No staff hired. The place runs on hope alone.</td></tr>';
     const totalWages = s.staff.reduce((a, st) => a + DATA.STAFF[st.type].wage, 0);
 
     UI.openModal(`
       <div class="modal-head"><h2>👥 Staff Management</h2><button class="btn-x" onclick="UI.closeModal()">✕</button></div>
       ${statusCard}
-      <div class="dash-grid three" style="margin-top:12px">${cards}</div>
-      <div class="dash-card">
+      <div class="dash-grid" style="margin-top:12px">${cards}</div>
+      <div class="dash-card" style="margin-top:12px">
         <h3>Your team — ${Game.money(totalWages)}/day in wages</h3>
         <table class="dash-table">
-          <tr><th>Name</th><th>Role</th><th>Level</th><th>Wage</th><th></th></tr>
+          <tr><th>Name</th><th>Role</th><th>Level</th><th>Current task</th><th>Wage</th><th></th></tr>
           ${roster}
         </table>
       </div>`, true);
@@ -612,7 +835,7 @@ const UI = {
           <div class="insp-row"><span>Post-event buzz</span><b class="good">×${Game.state.buzzMult.toFixed(1)} traffic for ${Game.state.buzzDays} days</b></div>
           <div class="insp-row"><span>Excitement rating</span><b>${'⭐'.repeat(Game.clamp(Math.round(t.excitement * 3), 1, 5))}</b></div>
           <div class="insp-row"><span>Upsets</span><b>${t.upsets}</b></div>
-          <div class="insp-blurb">Machines took some wear from the event — check their condition.</div>
+          <div class="insp-blurb">The crowd hammered your tables and trashed the floor — check conditions and flag the mess.</div>
         </div>
       </div>
       <button class="btn primary big" onclick="Tournament.close(); UI.closeModal();">Return to your arcade</button>`;
@@ -623,7 +846,7 @@ const UI = {
         <h2>${t.tier.id === 'world' ? '🌍 ' : '🏆 '}${t.tier.name}</h2>
         ${t.finished ? '<button class="btn-x" onclick="Tournament.close(); UI.closeModal();">✕</button>' : '<span class="live-badge">● LIVE</span>'}
       </div>
-      <div class="bracket">${cols.join('')}</div>
+      <div class="bracket${t.tier.entrants >= 32 ? ' xl' : t.tier.entrants >= 16 ? ' lg' : ''}">${cols.join('')}</div>
       ${highlights ? `<div class="highlights"><h3>🎙️ Commentary</h3>${highlights}</div>` : ''}
       <div class="bk-footer">${footer}</div>`, true);
   },
@@ -677,16 +900,16 @@ const UI = {
       <div class="modal-head"><h2>🕹️ PINBALL PALACE TYCOON</h2></div>
       <div class="insp-blurb" style="font-size:14px; line-height:1.7">
         You've just signed the lease on a tiny corner-shop arcade with two beat-up machines and big dreams.<br><br>
-        <b>💰 Get rich:</b> buy machines, tune your pricing, keep guests happy, expand the venue.<br>
-        <b>🏆 Get famous:</b> build reputation, host tournaments — Local ➜ Regional ➜ National ➜ <b>WORLD CHAMPIONSHIP</b>.<br><br>
-        <b>Quick tips:</b><br>
-        • Click a machine in the <b>shop</b> (left), then click the floor to place it.<br>
-        • Click any placed machine to inspect, upgrade, repair, or move it.<br>
-        • Machines wear out — bigger arcades need <b>more technicians</b>, or wear and breakdowns accelerate.<br>
-        • Bigger crowds mean more mess — keep enough <b>janitors</b> or satisfaction, reputation and tournament turnout suffer.<br>
-        • Higher-tier tournaments demand <b>variety and upgraded (★★/★★★) machines</b>, and pros must <b>qualify by ranking</b>.<br>
-        • <b>Event Managers</b> boost tournament revenue, attendance and reputation — check the Staff panel.<br>
-        • <b>Space</b> pauses. Speed buttons are up top. Your game auto-saves every night.
+        <b>🕹️ Arcade machines, claws & neon</b> pull the crowd in and build reputation.<br>
+        <b>🎯 Pinball tables</b> attract nobody — they exist to win <b>tournaments</b> and take money per play.<br>
+        You need BOTH: an arcade to fill the room, and a pinball stable to compete.<br><br>
+        <b>Hands-on management:</b><br>
+        • <b>Breakdowns:</b> click the broken machine → <b>Assign Repair</b>. A technician walks over and fixes it. No tech, no fix.<br>
+        • <b>Mess:</b> dirt and trash pile up on the floor. Click a dirty tile (or <b>drag a box</b> over several) to flag it — janitors clean only what you flag.<br>
+        • <b>Amenities:</b> guests get hungry and thirsty. Food/drink stands need <b>attendants</b> or the lines stall.<br>
+        • <b>Pricing:</b> cheap prices build happiness and reputation; gouging drains both.<br><br>
+        <b>Tournaments</b> demand VARIETY: 4 → 8 → 12 → all 16 <b>different</b> pinball tables, none in poor condition. Higher tiers also demand <b>★★★ upgrades</b> (none for Local, up to half your tables for the World Championship).<br><br>
+        <b>Space</b> pauses. Speed buttons are up top. Your game auto-saves every night.
       </div>
       <button class="btn primary big" onclick="UI.closeModal()">Open the doors!</button>`);
   },

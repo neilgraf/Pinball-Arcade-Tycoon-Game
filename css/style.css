@@ -155,10 +155,41 @@ html, body {
 }
 #priceLabel { font-size: 12px; font-weight: 700; }
 input[type=range] { width: 100%; accent-color: var(--pink); }
+/* Expand button: fixed short label, never overflows */
+#btnExpand {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ================= CANVAS AREA ================= */
 #canvasWrap { flex: 1; position: relative; overflow: hidden; }
 #gameCanvas { display: block; cursor: pointer; }
+
+/* ---- Alert chips: cleanliness, breakdowns, staffing ---- */
+#alertBar {
+  position: absolute; top: 10px; left: 10px;
+  display: flex; flex-direction: column; gap: 5px;
+  pointer-events: none;
+  max-width: 300px;
+  z-index: 5;
+}
+.alert-chip {
+  font-size: 11.5px; font-weight: 700;
+  padding: 5px 11px;
+  border-radius: 14px;
+  background: rgba(23,16,41,.92);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  backdrop-filter: blur(4px);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.alert-chip.bad {
+  border-color: var(--bad);
+  color: var(--bad);
+  animation: pulse 1.4s infinite;
+}
 
 #placeHint {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -328,21 +359,57 @@ input[type=range] { width: 100%; accent-color: var(--pink); }
 
 /* ================= BRACKET ================= */
 .bracket {
-  display: flex; gap: 14px;
-  overflow-x: auto;
-  padding: 6px 2px 12px;
+  display: flex; gap: 16px;
+  overflow: auto;
+  max-height: 58vh;
+  padding: 6px 4px 12px;
 }
-.bk-round { flex: 1; min-width: 170px; display: flex; flex-direction: column; justify-content: space-around; gap: 8px; }
+.bk-round {
+  flex: 1 0 170px;
+  min-width: 170px;
+  display: flex; flex-direction: column;
+  justify-content: space-around; gap: 8px;
+}
 .bk-round-name {
   text-align: center; font-size: 11px; font-weight: 800;
   letter-spacing: 1.5px; color: var(--pink); margin-bottom: 2px;
+  position: sticky; top: 0;
+  background: var(--panel);
+  padding: 2px 0;
+  z-index: 2;
 }
 .bk-match {
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 9px;
   overflow: hidden;
+  position: relative;
+  flex-shrink: 0;   /* never squash matches — the bracket scrolls instead */
 }
+/* Connector stubs between rounds: winners feed rightward */
+.bk-round:not(:last-child) .bk-match::after {
+  content: '';
+  position: absolute; right: -17px; top: 50%;
+  width: 16px; height: 2px;
+  background: var(--border);
+}
+.bk-round:not(:first-child) .bk-match::before {
+  content: '';
+  position: absolute; left: -17px; top: 50%;
+  width: 16px; height: 2px;
+  background: var(--border);
+}
+/* Compact sizing so 16- and 32-player fields align cleanly */
+.bracket.lg { gap: 14px; }
+.bracket.lg .bk-round { flex-basis: 160px; min-width: 160px; }
+.bracket.lg .bk-player { padding: 4px 7px; font-size: 11px; }
+.bracket.lg .bk-score { font-size: 10px; }
+.bracket.xl { gap: 12px; }
+.bracket.xl .bk-round { flex-basis: 148px; min-width: 148px; gap: 5px; }
+.bracket.xl .bk-player { padding: 3px 6px; font-size: 10.5px; }
+.bracket.xl .bk-score { font-size: 9.5px; }
+.bracket.xl .bk-round:not(:last-child) .bk-match::after { right: -13px; width: 12px; }
+.bracket.xl .bk-round:not(:first-child) .bk-match::before { left: -13px; width: 12px; }
 .bk-match.upset { border-color: var(--warn); box-shadow: 0 0 10px rgba(255,204,0,.2); }
 .bk-match.pending { opacity: .45; }
 .bk-player {
