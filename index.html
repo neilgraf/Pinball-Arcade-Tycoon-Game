@@ -21,14 +21,14 @@
       <span class="stat-value" id="statRep">0</span>
       <span class="stat-sub" id="statRepTier">Unknown</span>
     </div>
-    <div class="stat" title="Customer satisfaction — drives traffic and reputation">
+    <div class="stat" title="Happiness — pricing, cleanliness, amenities and working machines drive it. Happy guests spend more and boost reputation">
       <span class="stat-icon">😊</span>
       <span class="stat-value" id="statSat">70%</span>
     </div>
-    <div class="stat" title="Cleanliness — janitors keep it up">
+    <div class="stat" title="Cleanliness — dirt and trash pile up on the floor. Click or drag-select dirty tiles to send janitors">
       <span class="stat-icon">🧹</span>
       <span class="stat-value" id="statClean">100%</span>
-      <button class="btn tiny" id="btnClean" title="Deep clean: $60 for +45 cleanliness">🧼 $60</button>
+      <button class="btn tiny" id="btnClean" title="Emergency deep clean — instantly clears all dirt, for a price">🧼 $40</button>
     </div>
     <div class="stat" title="Guests currently in your arcade">
       <span class="stat-icon">👥</span>
@@ -73,6 +73,7 @@
 
     <main id="canvasWrap">
       <canvas id="gameCanvas"></canvas>
+      <div id="alertBar" style="display:none"></div>
       <div id="placeHint" style="display:none"></div>
       <div id="inspectPanel" style="display:none"></div>
       <div id="daySummary"></div>

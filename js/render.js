@@ -9,6 +9,7 @@ const Render = {
   placingDef: null,    // machine def id while in placement mode
   movingMachine: null, // machine being repositioned
   hoverTile: null,
+  selectBox: null,     // {x0,y0,x1,y1} world coords while drag-selecting dirt
 
   init() {
     Render.canvas = document.getElementById('gameCanvas');
@@ -74,16 +75,22 @@ const Render = {
     ctx.setTransform(Render.scale, 0, 0, Render.scale, Render.offX, Render.offY);
 
     Render.drawFloor(g, T);
+    Render.drawDirt(T);
     Render.drawWalls(g, T);
 
     // Draw machines sorted by y so lower ones overlap correctly
     const sorted = [...s.machines].sort((a, b) => a.y - b.y);
     for (const m of sorted) Render.drawMachine(m, T);
 
+    Render.drawAttendants(T);
     for (const c of s.customers) Render.drawCustomer(c, T);
+    for (const st of s.staff) {
+      if (st.type === 'tech' || st.type === 'janitor') Render.drawStaff(st, T);
+    }
 
     if (Render.placingDef || Render.movingMachine) Render.drawGhost(T);
     Render.drawSelection(T);
+    Render.drawSelectBox(T);
   },
 
   drawFloor(g, T) {
@@ -119,6 +126,56 @@ const Render = {
     ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('ENTRANCE', (e.x + 0.5) * T, (e.y + 0.55) * T);
+  },
+
+  /* Dirt and trash are physical tiles — click (or drag a box) to flag
+     them for the janitors */
+  drawDirt(T) {
+    const ctx = Render.ctx;
+    for (const d of Game.state.dirtTiles) {
+      const x = d.x * T, y = d.y * T;
+      // deterministic pseudo-random layout per tile
+      const seed = d.x * 31 + d.y * 57;
+      const r1 = ((seed * 97) % 100) / 100, r2 = ((seed * 53) % 100) / 100, r3 = ((seed * 71) % 100) / 100;
+      if (d.kind === 'stain') {
+        ctx.fillStyle = `rgba(95,72,48,${0.30 + d.amt * 0.05})`;
+        ctx.beginPath();
+        ctx.ellipse(x + T * (0.35 + r1 * 0.3), y + T * (0.4 + r2 * 0.25), T * 0.24, T * 0.16, r3 * 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(80,60,40,${0.25 + d.amt * 0.04})`;
+        ctx.beginPath();
+        ctx.ellipse(x + T * (0.55 + r2 * 0.2), y + T * (0.55 + r1 * 0.2), T * 0.16, T * 0.11, r1 * 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else { // trash
+        ctx.fillStyle = '#d8d3c8';
+        ctx.save();
+        ctx.translate(x + T * (0.3 + r1 * 0.35), y + T * (0.35 + r2 * 0.3));
+        ctx.rotate(r3 * 6);
+        ctx.fillRect(-4, -3, 8, 6);
+        ctx.restore();
+        ctx.fillStyle = '#c0392b';
+        ctx.beginPath();
+        ctx.arc(x + T * (0.6 + r2 * 0.2), y + T * (0.6 + r3 * 0.2), 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(90,70,50,0.35)';
+        ctx.beginPath();
+        ctx.ellipse(x + T * 0.5, y + T * 0.6, T * 0.2, T * 0.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // flagged / assigned indicators
+      if (d.assigned !== null) {
+        ctx.strokeStyle = 'rgba(75,227,138,0.85)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 2, y + 2, T - 4, T - 4);
+      } else if (d.flagged) {
+        const pulse = 0.5 + 0.5 * Math.sin(Render.time * 5 + seed);
+        ctx.strokeStyle = `rgba(255,204,0,${0.4 + 0.5 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.strokeRect(x + 2, y + 2, T - 4, T - 4);
+        ctx.setLineDash([]);
+      }
+    }
   },
 
   drawWalls(g, T) {
@@ -171,6 +228,34 @@ const Render = {
         ctx.beginPath(); ctx.arc(x + T * 0.35, y + T * 0.80, 2, 0, 7); ctx.fill();
         ctx.beginPath(); ctx.arc(x + T * 0.65, y + T * 0.80, 2, 0, 7); ctx.fill();
       }
+    } else if (def.kind === 'claw') {
+      // Claw machine: glass box full of prizes
+      ctx.fillStyle = m.broken ? '#4a3038' : `hsl(${hue},50%,30%)`;
+      Render.rrect(x + 6, y + 3, T - 12, T * 0.88, 4);
+      ctx.fillStyle = m.broken ? '#1a1420' : `hsla(${hue},60%,${blink ? 30 : 24}%,0.9)`;
+      Render.rrect(x + 9, y + 8, T - 18, T * 0.55, 3);
+      if (!m.broken) {
+        // plushies
+        const colors = ['#ff6b9d', '#ffe066', '#55efc4', '#a29bfe'];
+        for (let i = 0; i < 4; i++) {
+          ctx.fillStyle = colors[(i + m.id) % colors.length];
+          ctx.beginPath();
+          ctx.arc(x + T * (0.3 + (i % 3) * 0.2), y + T * (0.5 - Math.floor(i / 3) * 0.12), 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // claw
+        ctx.strokeStyle = '#ccc';
+        ctx.lineWidth = 1.5;
+        const cx = x + T / 2 + Math.sin(Render.time * 1.5 + m.id) * T * 0.12;
+        ctx.beginPath();
+        ctx.moveTo(cx, y + 9);
+        ctx.lineTo(cx, y + 16);
+        ctx.moveTo(cx - 3, y + 20); ctx.lineTo(cx, y + 16); ctx.lineTo(cx + 3, y + 20);
+        ctx.stroke();
+      }
+      // marquee
+      ctx.fillStyle = m.broken ? '#332530' : `hsl(${hue},90%,${blink ? 60 : 48}%)`;
+      Render.rrect(x + 8, y + 3, T - 16, 5, 2);
     } else if (def.type === 'arcade') {
       // Upright cabinet
       ctx.fillStyle = m.broken ? '#4a3038' : `hsl(${hue},50%,${25 + m.level * 4}%)`;
@@ -193,23 +278,43 @@ const Render = {
       ctx.fillStyle = `hsl(${hue},90%,${blink ? 65 : 55}%)`;
       ctx.font = `bold ${T * 0.42}px sans-serif`;
       ctx.textAlign = 'center';
-      const icon = { snackbar: '🍿', prizes: '🧸', neonsign: '✨' }[def.id] || '★';
+      const icon = { snackbar: '🍿', prizes: '🧸', neonsign: '✨', neonarch: '🌈', foodstand: '🍔', drinkstand: '🥤' }[def.id] || '★';
       ctx.fillText(icon, x + T / 2, y + T * 0.68);
     }
 
-    // condition warning / broken sign
+    // ---- status indicators ----
     if (m.broken) {
       ctx.fillStyle = blink ? '#ff3355' : '#aa2244';
       ctx.font = `bold ${T * 0.24}px monospace`;
       ctx.textAlign = 'center';
       ctx.fillText('OUT OF', x + T / 2, y + T * 0.45);
       ctx.fillText('ORDER', x + T / 2, y + T * 0.68);
-      if (m.repair > 0) { // technician progress bar
+      const assigned = m.assignedTech !== null;
+      const queued = !assigned && Game.queueEntry(m.id) !== null;
+      if (assigned) {
+        // tech en route / working — green wrench + progress bar
+        ctx.font = `${T * 0.28}px sans-serif`;
+        ctx.fillText('🔧', x + T * 0.5, y - 4);
         ctx.fillStyle = '#222';
-        ctx.fillRect(x + 6, y - 6, T - 12, 4);
+        ctx.fillRect(x + 6, y - 3, T - 12, 4);
         ctx.fillStyle = '#4be38a';
-        ctx.fillRect(x + 6, y - 6, (T - 12) * m.repair, 4);
+        ctx.fillRect(x + 6, y - 3, (T - 12) * m.repair, 4);
+      } else if (queued) {
+        // waiting in the repair queue — yellow wrench
+        ctx.font = `${T * 0.28}px sans-serif`;
+        ctx.fillText('🕐', x + T * 0.5, y - 4);
+      } else {
+        // NOBODY assigned — angry pulsing outline demanding a click
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(Render.time * 4 + m.id));
+        ctx.strokeStyle = `rgba(255,51,85,${pulse})`;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x + 1, y + 1, T - 2, T - 2);
       }
+    } else if (m.assignedTech !== null) {
+      // maintenance in progress
+      ctx.font = `${T * 0.28}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('🔧', x + T * 0.5, y - 4);
     } else if (m.condition < 40 && def.type !== 'amenity') {
       ctx.fillStyle = '#ffcc00';
       ctx.font = `bold ${T * 0.3}px sans-serif`;
@@ -252,6 +357,70 @@ const Render = {
       ctx.arc(x, y - 13.5 + bob, 4.5, Math.PI, Math.PI * 2);
       ctx.fill();
     }
+    // unmet needs bubble
+    if (c.thirst >= 70 || c.hunger >= 75) {
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(c.thirst >= 70 ? '🥤' : '🍔', x + 7, y - 16 + bob);
+    }
+  },
+
+  /* Techs & janitors: uniformed workers that walk to their tasks */
+  drawStaff(st, T) {
+    const ctx = Render.ctx;
+    const x = st.x * T, y = st.y * T;
+    const working = st.task && st.task.phase === 'work';
+    const bob = working ? Math.sin(Render.time * 11) * 1.8 : 0;
+    const color = st.type === 'tech' ? '#ff9f43' : '#74b9ff';
+
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 6, 6.5, 2.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // uniform body
+    ctx.fillStyle = color;
+    Render.rrect(x - 5.5, y - 8 + bob, 11, 12, 4);
+    // hi-vis stripe
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillRect(x - 5.5, y - 4 + bob, 11, 2);
+    // head
+    ctx.fillStyle = '#ffdbac';
+    ctx.beginPath();
+    ctx.arc(x, y - 12 + bob, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    // cap in team color
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y - 13 + bob, 4.5, Math.PI, Math.PI * 2);
+    ctx.fill();
+    // task badge
+    if (st.task) {
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(st.type === 'tech' ? '🔧' : '🧹', x, y - 20 + bob);
+    }
+  },
+
+  /* Attendants stand behind the service amenities they staff */
+  drawAttendants(T) {
+    const ctx = Render.ctx;
+    const attendants = Game.state.staff.filter(st => st.type === 'attendant');
+    const stands = Game.serviceAmenities();
+    const n = Math.min(attendants.length, stands.length);
+    for (let i = 0; i < n; i++) {
+      const m = stands[i];
+      const x = (m.x + 0.5) * T, y = (m.y + 0.15) * T;
+      ctx.fillStyle = '#e17055';
+      Render.rrect(x - 4.5, y - 6, 9, 9, 3);
+      ctx.fillStyle = '#ffdbac';
+      ctx.beginPath();
+      ctx.arc(x, y - 9, 3.8, 0, Math.PI * 2);
+      ctx.fill();
+      // little paper hat
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x - 3, y - 13, 6, 2.5);
+    }
   },
 
   drawGhost(T) {
@@ -276,6 +445,21 @@ const Render = {
     ctx.strokeStyle = `rgba(0,255,224,${pulse})`;
     ctx.lineWidth = 2.5;
     ctx.strokeRect(m.x * T + 2, m.y * T + 2, T - 4, T - 4);
+  },
+
+  drawSelectBox(T) {
+    if (!Render.selectBox) return;
+    const ctx = Render.ctx;
+    const b = Render.selectBox;
+    const x = Math.min(b.x0, b.x1) * T, y = Math.min(b.y0, b.y1) * T;
+    const w = Math.abs(b.x1 - b.x0) * T, h = Math.abs(b.y1 - b.y0) * T;
+    ctx.fillStyle = 'rgba(0,255,224,0.10)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = 'rgba(0,255,224,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
   },
 
   rrect(x, y, w, h, r) {
